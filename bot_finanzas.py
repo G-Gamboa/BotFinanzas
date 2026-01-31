@@ -28,6 +28,7 @@ SERVICE_ACCOUNT_INFO = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
 
 SHEET_INGRESOS = "Ingresos"
 SHEET_EGRESOS = "Egresos"
+SHEET_MOVIMIENTOS = "Movimientos"
 
 # =========================
 # CATÁLOGOS (BOTONES)
@@ -41,6 +42,8 @@ CATEG_EGR = [
     "Agua", "Internet", "Transporte", "Comida","Casa", "Chatarra", "Supermercado",
     "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos","Suscripciones","Salidas","Regalos","Otros"
 ]
+
+CUENTAS = ["Efectivo", "BI", "Banrural", "Nexa", "Zigi", "GyT", "Osmo", "Ugly"]
 
 # =========================
 # HELPERS UI
@@ -63,8 +66,10 @@ def kb_main():
             InlineKeyboardButton("Ingreso", callback_data="TYPE:ING"),
             InlineKeyboardButton("Egreso", callback_data="TYPE:EGR")
         ],
+        [InlineKeyboardButton("Movimiento", callback_data="TYPE:MOV")],
         [InlineKeyboardButton("Cancelar", callback_data="CANCEL")]
     ])
+
 
 def kb_date():
     return InlineKeyboardMarkup([
@@ -306,6 +311,15 @@ def render_summary(data):
             f"Banco: {data.get('banco','')}\n"
             f"Nota: {data.get('nota','')}"
         )
+    elif data["tipo"] == "MOV":
+        return (
+            "Resumen movimiento:\n"
+            f"Fecha: {data.get('fecha','')}\n"
+            f"Remitente: {data.get('remitente','')}\n"
+            f"Destino: {data.get('destino','')}\n"
+            f"Monto: {data.get('monto','')}\n"
+            f"Nota: {data.get('nota','')}"
+        )
     else:
         return (
             "Resumen:\n"
@@ -435,9 +449,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data["tipo"] == "ING":
             st["step"] = "fuente"
             await q.edit_message_text("Fuente:", reply_markup=kb_list(FUENTES_ING, "SRC"))
-        else:
+        elif data["tipo"] == "EGR":
             st["step"] = "categoria"
             await q.edit_message_text("Categoría:", reply_markup=kb_list(CATEG_EGR, "CAT"))
+        else:  # MOV
+            st["step"] = "remitente"
+            await q.edit_message_text("Remitente (de dónde sale):", reply_markup=kb_list(CUENTAS, "FROM"))
+
         return
 
     if cb.startswith("SRC:"):
@@ -474,6 +492,22 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         st_reset(context)
         await q.edit_message_text("Guardado correctamente.")
         return
+    
+    if cb.startswith("FROM:"):
+        data["remitente"] = cb.split(":", 1)[1]
+        st["step"] = "destino"
+        await q.edit_message_text("Destino (a dónde entra):", reply_markup=kb_list(CUENTAS, "TO"))
+        return
+
+    if cb.startswith("TO:"):
+        data["destino"] = cb.split(":", 1)[1]
+        if data.get("destino") == data.get("remitente"):
+            await q.edit_message_text("Destino no puede ser igual al remitente. Elige otro:", reply_markup=kb_list(CUENTAS, "TO"))
+            return
+        st["step"] = "monto"
+        await q.edit_message_text("Monto:")
+        return
+
 
 # =========================
 # TEXT INPUT
@@ -498,10 +532,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if step == "monto":
-        data["monto"] = float(txt.replace(",", "."))
-        st["step"] = "metodo"
-        await update.message.reply_text("Método:", reply_markup=kb_list(METODOS, "PAY"))
+        data["monto"] = float(txt.replace(".", "").replace(",", "."))
+        if data["tipo"] == "MOV":
+            st["step"] = "nota"
+            await update.message.reply_text("Nota (o -):")
+        else:
+            st["step"] = "metodo"
+            await update.message.reply_text("Método:", reply_markup=kb_list(METODOS, "PAY"))
         return
+
 
     if step == "nota":
         data["nota"] = "" if txt == "-" else txt
@@ -532,6 +571,17 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data, uid: int):
             data["fecha"], data["fuente"], data["categoria"],
             data["monto"], data["metodo"], data["banco"], data["nota"]
         ], value_input_option="USER_ENTERED")
+
+    elif data["tipo"] == "MOV":
+        ws = sh.worksheet(SHEET_MOVIMIENTOS)
+        ws.append_row([
+            data["fecha"],
+            data["remitente"],
+            data["destino"],
+            data["monto"],
+            data.get("nota", "")
+        ], value_input_option="USER_ENTERED")
+
     else:
         ws = sh.worksheet(SHEET_EGRESOS)
         ws.append_row([
@@ -582,4 +632,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
