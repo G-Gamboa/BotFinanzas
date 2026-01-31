@@ -39,7 +39,7 @@ METODOS = ["Efectivo", "Transferencia", "Osmo", "Ugly"]
 BANCOS = ["BI", "Banrural", "Nexa", "Zigi","GyT"]
 
 CATEG_EGR = [
-    "Agua", "Internet", "Transporte", "Comida","Casa", "Chatarra", "Supermercado", "Estudios",
+    "Agua", "Internet", "Transporte", "Comida","Casa", "Chatarra", "Supermercado","Estudios",
     "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos","Suscripciones","Salidas","Regalos","Otros"
 ]
 
@@ -532,7 +532,24 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if step == "monto":
-        data["monto"] = float(txt.replace(".", "").replace(",", "."))
+        raw = txt.strip()
+
+        # quitar moneda y espacios
+        raw = re.sub(r"[^0-9.,\-]", "", raw)
+
+        # Caso Guatemala: 1.234,56
+        if "." in raw and "," in raw:
+            raw = raw.replace(".", "")
+            raw = raw.replace(",", ".")
+        # Caso decimal con punto: 150.5
+        elif "." in raw:
+            raw = raw.replace(",", "")
+        # Caso decimal con coma: 150,5
+        elif "," in raw:
+            raw = raw.replace(",", ".")
+
+        data["monto"] = float(raw)
+
         if data["tipo"] == "MOV":
             st["step"] = "nota"
             await update.message.reply_text("Nota (o -):")
@@ -632,4 +649,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
