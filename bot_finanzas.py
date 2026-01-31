@@ -2,6 +2,10 @@ import re
 import json
 import os
 from datetime import datetime, timedelta
+from datetime import date, time as dtime
+from zoneinfo import ZoneInfo
+from collections import defaultdict
+
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -30,11 +34,11 @@ SHEET_EGRESOS = "Egresos"
 FUENTES_ING = ["Trabajo", "Freelance", "Negocios"]
 CATEG_ING = ["Salario", "Proyecto", "Inversiones", "Ventas", "Otros"]
 METODOS = ["Efectivo", "Transferencia", "Osmo", "Ugly"]
-BANCOS = ["Bi", "Banrural", "Nexa", "Zigi"]
+BANCOS = ["BI", "Banrural", "Nexa", "Zigi","GyT"]
 
 CATEG_EGR = [
-    "Agua", "Internet", "Transporte", "Comida casa", "Chatarra",
-    "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos"
+    "Agua", "Internet", "Transporte", "Comida","Casa", "Chatarra", "Supermercado",
+    "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos","Suscripciones","Salidas","Regalos","Otros"
 ]
 
 # =========================
@@ -80,6 +84,196 @@ def kb_confirm():
         [InlineKeyboardButton("Cancelar", callback_data="CANCEL")]
     ])
 
+TZ = ZoneInfo("America/Guatemala")
+
+def get_sheet_for_user(gc, uid: int):
+    uid_str = str(uid)
+    sheet_id = USER_SHEETS.get(uid_str)
+    if not sheet_id:
+        raise RuntimeError("Tu usuario no tiene Sheet configurado.")
+    return gc.open_by_key(sheet_id)
+
+def parse_fecha(value) -> date | None:
+    # Esperamos YYYY-MM-DD; si alguien metió otra cosa, lo ignoramos
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def to_float(value) -> float:
+    try:
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return 0.0
+
+def month_range(today: date):
+    start = today.replace(day=1)
+    # siguiente mes:
+    if start.month == 12:
+        next_month = date(start.year + 1, 1, 1)
+    else:
+        next_month = date(start.year, start.month + 1, 1)
+    end = next_month  # exclusivo
+    return start, end
+
+def week_range(today: date):
+    # semana lunes-domingo
+    start = today - timedelta(days=today.weekday())
+    end = start + timedelta(days=7)
+    return start, end
+
+def build_resumen_mes(gc, uid: int) -> str:
+    sh = get_sheet_for_user(gc, uid)
+
+    ws_ing = sh.worksheet(SHEET_INGRESOS)
+    ws_egr = sh.worksheet(SHEET_EGRESOS)
+
+    today = datetime.now(TZ).date()
+    start, end = month_range(today)
+
+    ing_rows = ws_ing.get_all_records()
+    egr_rows = ws_egr.get_all_records()
+
+    total_ing = 0.0
+    total_egr = 0.0
+    total_ahorro = 0.0
+    gastos_por_categoria = defaultdict(float)
+
+    for r in ing_rows:
+        f = parse_fecha(r.get("FECHA"))
+        if not f or not (start <= f < end):
+            continue
+        total_ing += to_float(r.get("MONTO"))
+
+    for r in egr_rows:
+        f = parse_fecha(r.get("FECHA"))
+        if not f or not (start <= f < end):
+            continue
+        monto = to_float(r.get("MONTO"))
+        cat = str(r.get("CATEGORÍA", "")).strip()
+
+        total_egr += monto
+        if cat.lower() == "ahorro":
+            total_ahorro += monto
+        else:
+            gastos_por_categoria[cat] += monto
+
+    balance = total_ing - total_egr
+
+    top = sorted(gastos_por_categoria.items(), key=lambda x: x[1], reverse=True)[:6]
+    top_txt = "\n".join([f"- {c}: {v:,.2f}" for c, v in top]) if top else "- (sin egresos aún)"
+
+    return (
+        f"Resumen del mes ({start} a {end - timedelta(days=1)}):\n"
+        f"Ingresos: {total_ing:,.2f}\n"
+        f"Egresos: {total_egr:,.2f}\n"
+        f"Ahorro (cat. Ahorro): {total_ahorro:,.2f}\n"
+        f"Balance: {balance:,.2f}\n\n"
+        f"Top gastos (sin Ahorro):\n{top_txt}"
+    )
+
+def build_resumen_semana(gc, uid: int) -> str:
+    sh = get_sheet_for_user(gc, uid)
+    ws_ing = sh.worksheet(SHEET_INGRESOS)
+    ws_egr = sh.worksheet(SHEET_EGRESOS)
+
+    today = datetime.now(TZ).date()
+    start, end = week_range(today)
+
+    ing_rows = ws_ing.get_all_records()
+    egr_rows = ws_egr.get_all_records()
+
+    total_ing = 0.0
+    total_egr = 0.0
+    gastos_por_categoria = defaultdict(float)
+
+    for r in ing_rows:
+        f = parse_fecha(r.get("FECHA"))
+        if not f or not (start <= f < end):
+            continue
+        total_ing += to_float(r.get("MONTO"))
+
+    for r in egr_rows:
+        f = parse_fecha(r.get("FECHA"))
+        if not f or not (start <= f < end):
+            continue
+        monto = to_float(r.get("MONTO"))
+        cat = str(r.get("CATEGORÍA", "")).strip()
+        total_egr += monto
+        if cat.lower() != "ahorro":
+            gastos_por_categoria[cat] += monto
+
+    balance = total_ing - total_egr
+    top = sorted(gastos_por_categoria.items(), key=lambda x: x[1], reverse=True)[:6]
+    top_txt = "\n".join([f"- {c}: {v:,.2f}" for c, v in top]) if top else "- (sin egresos aún)"
+
+    return (
+        f"Resumen semanal ({start} a {end - timedelta(days=1)}):\n"
+        f"Ingresos: {total_ing:,.2f}\n"
+        f"Egresos: {total_egr:,.2f}\n"
+        f"Balance: {balance:,.2f}\n\n"
+        f"Top gastos:\n{top_txt}"
+    )
+
+from datetime import date, time as dtime
+
+async def job_resumen_semanal(context: ContextTypes.DEFAULT_TYPE):
+    gc = context.application.bot_data["gc"]
+    bot = context.bot
+
+    for uid_str in USER_SHEETS.keys():
+        uid = int(uid_str)
+        try:
+            txt = build_resumen_semana(gc, uid)
+            await bot.send_message(chat_id=uid, text=txt)
+        except Exception:
+            # si el usuario nunca inició chat con el bot o lo bloqueó, falla; lo ignoramos
+            pass
+
+
+def is_last_day_of_month(d: date) -> bool:
+    # Si mañana es día 1, hoy es el último día del mes
+    return (d + timedelta(days=1)).day == 1
+
+
+async def job_resumen_fin_de_mes(context: ContextTypes.DEFAULT_TYPE):
+    hoy = datetime.now(TZ).date()
+    if not is_last_day_of_month(hoy):
+        return
+
+    gc = context.application.bot_data["gc"]
+    bot = context.bot
+
+    for uid_str in USER_SHEETS.keys():
+        uid = int(uid_str)
+        try:
+            txt = build_resumen_mes(gc, uid)
+            await bot.send_message(chat_id=uid, text=f"Fin de mes:\n\n{txt}")
+        except Exception:
+            pass
+
+def render_summary(data):
+    if data["tipo"] == "ING":
+        return (
+            "Resumen:\n"
+            f"Fecha: {data.get('fecha','')}\n"
+            f"Fuente: {data.get('fuente','')}\n"
+            f"Categoría: {data.get('categoria','')}\n"
+            f"Monto: {data.get('monto','')}\n"
+            f"Método: {data.get('metodo','')}\n"
+            f"Banco: {data.get('banco','')}\n"
+            f"Nota: {data.get('nota','')}"
+        )
+    else:
+        return (
+            "Resumen:\n"
+            f"Fecha: {data.get('fecha','')}\n"
+            f"Categoría: {data.get('categoria','')}\n"
+            f"Monto: {data.get('monto','')}\n"
+            f"Método: {data.get('metodo','')}\n"
+            f"Banco: {data.get('banco','')}\n"
+            f"Nota: {data.get('nota','')}"
+        )
 # =========================
 # STATE
 # =========================
@@ -132,6 +326,16 @@ async def nuevo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st_reset(context)
     await update.message.reply_text("Cancelado. Usa /nuevo para iniciar.")
+
+async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+    gc = context.application.bot_data["gc"]
+    try:
+        txt = build_resumen_mes(gc, update.effective_user.id)
+        await update.message.reply_text(txt)
+    except Exception as e:
+        await update.message.reply_text(f"No pude generar el resumen. Error: {e}")
 
 # =========================
 # CALLBACKS
@@ -278,30 +482,6 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data, uid: int):
         ], value_input_option="USER_ENTERED")
 
 
-def render_summary(data):
-    if data["tipo"] == "ING":
-        return (
-            "Resumen:\n"
-            f"Fecha: {data.get('fecha','')}\n"
-            f"Fuente: {data.get('fuente','')}\n"
-            f"Categoría: {data.get('categoria','')}\n"
-            f"Monto: {data.get('monto','')}\n"
-            f"Método: {data.get('metodo','')}\n"
-            f"Banco: {data.get('banco','')}\n"
-            f"Nota: {data.get('nota','')}"
-        )
-    else:
-        return (
-            "Resumen:\n"
-            f"Fecha: {data.get('fecha','')}\n"
-            f"Categoría: {data.get('categoria','')}\n"
-            f"Monto: {data.get('monto','')}\n"
-            f"Método: {data.get('metodo','')}\n"
-            f"Banco: {data.get('banco','')}\n"
-            f"Nota: {data.get('nota','')}"
-        )
-
-
 # =========================
 # MAIN
 # =========================
@@ -311,10 +491,29 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.bot_data["gc"] = gc
 
+    # 1) Semanal: domingos a las 21:00 Guatemala
+    app.job_queue.run_daily(
+        job_resumen_semanal,
+        time=dtime(hour=21, minute=0, tzinfo=TZ),
+        days=(6,),  # 0=Lun ... 6=Dom
+        name="resumen_semanal_dom_2100"
+    )
+
+    # 2) Fin de mes: chequeo diario a las 21:00, solo envía si hoy es último día
+    app.job_queue.run_daily(
+        job_resumen_fin_de_mes,
+        time=dtime(hour=21, minute=0, tzinfo=TZ),
+        name="resumen_fin_de_mes_ultimo_dia_2100"
+    )
+
+
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("nuevo", nuevo))
     app.add_handler(CommandHandler("cancelar", cancelar))
     app.add_handler(CommandHandler("whoami", whoami))
+    app.add_handler(CommandHandler("resumen", resumen))
+
 
     app.add_handler(CallbackQueryHandler(on_cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
