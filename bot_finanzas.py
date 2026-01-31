@@ -17,15 +17,12 @@ from telegram.ext import (
 # CONFIG (RAILWAY)
 # =========================
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-SHEET_ID = os.environ["SHEET_ID"]
 
+USER_SHEETS = json.loads(os.environ["USER_SHEETS"])
 SERVICE_ACCOUNT_INFO = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
 
 SHEET_INGRESOS = "Ingresos"
 SHEET_EGRESOS = "Egresos"
-
-# 👇 TU USER ID (déjalo así)
-ALLOWED_USER_IDS = {1282471582}
 
 # =========================
 # CATÁLOGOS (BOTONES)
@@ -95,11 +92,12 @@ def st_reset(context: ContextTypes.DEFAULT_TYPE):
     context.user_data["flow"] = {"step": None, "data": {}}
 
 def allowed(update: Update) -> bool:
-    uid = update.effective_user.id if update.effective_user else None
     # permitir /whoami a cualquiera
     if update.message and update.message.text == "/whoami":
         return True
-    return uid in ALLOWED_USER_IDS
+
+    uid = str(update.effective_user.id) if update.effective_user else ""
+    return uid in USER_SHEETS
 
 
 # =========================
@@ -210,7 +208,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if cb == "CONFIRM:SAVE":
-        await save_to_sheets(context, data)
+        await save_to_sheets(context, data, update.effective_user.id)
         st_reset(context)
         await q.edit_message_text("Guardado correctamente.")
         return
@@ -255,8 +253,16 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # SAVE
 # =========================
-async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data):
-    sh = context.application.bot_data["sh"]
+async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data, uid: int):
+    gc = context.application.bot_data["gc"]
+
+    uid_str = str(uid)
+    sheet_id = USER_SHEETS.get(uid_str)
+
+    if not sheet_id:
+        raise RuntimeError("Tu usuario no tiene Sheet configurado.")
+
+    sh = gc.open_by_key(sheet_id)
 
     if data["tipo"] == "ING":
         ws = sh.worksheet(SHEET_INGRESOS)
@@ -270,6 +276,7 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data):
             data["fecha"], data["categoria"],
             data["monto"], data["metodo"], data["banco"], data["nota"]
         ], value_input_option="USER_ENTERED")
+
 
 def render_summary(data):
     if data["tipo"] == "ING":
@@ -300,10 +307,9 @@ def render_summary(data):
 # =========================
 def main():
     gc = gs_client()
-    sh = gc.open_by_key(SHEET_ID)
 
     app = Application.builder().token(BOT_TOKEN).build()
-    app.bot_data["sh"] = sh
+    app.bot_data["gc"] = gc
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("nuevo", nuevo))
@@ -316,6 +322,6 @@ def main():
     print("Bot finanzas encendido...")
     app.run_polling()
 
+
 if __name__ == "__main__":
     main()
-
