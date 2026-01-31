@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from datetime import date, time as dtime
 from zoneinfo import ZoneInfo
 from collections import defaultdict
-
+import unicodedata
+from datetime import date as _date
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -93,12 +94,26 @@ def get_sheet_for_user(gc, uid: int):
         raise RuntimeError("Tu usuario no tiene Sheet configurado.")
     return gc.open_by_key(sheet_id)
 
-def parse_fecha(value) -> date | None:
-    # Esperamos YYYY-MM-DD; si alguien metió otra cosa, lo ignoramos
-    try:
-        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
-    except Exception:
+def parse_fecha(value):
+    if value is None:
         return None
+
+    # Si ya viene como date/datetime (a veces pasa)
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, _date):
+        return value
+
+    s = str(value).strip()
+
+    # intenta formatos comunes
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            pass
+
+    return None
 
 def to_float(value) -> float:
     try:
@@ -140,17 +155,18 @@ def build_resumen_mes(gc, uid: int) -> str:
     gastos_por_categoria = defaultdict(float)
 
     for r in ing_rows:
-        f = parse_fecha(r.get("FECHA"))
+        f = parse_fecha(pick(r, "FECHA", "Fecha"))
         if not f or not (start <= f < end):
             continue
-        total_ing += to_float(r.get("MONTO"))
+        total_ing += to_float(pick(r, "MONTO", "Monto"))
 
     for r in egr_rows:
-        f = parse_fecha(r.get("FECHA"))
+        f = parse_fecha(pick(r, "FECHA", "Fecha"))
         if not f or not (start <= f < end):
             continue
-        monto = to_float(r.get("MONTO"))
-        cat = str(r.get("CATEGORÍA", "")).strip()
+
+        monto = to_float(pick(r, "MONTO", "Monto"))
+        cat = str(pick(r, "CATEGORÍA", "CATEGORIA", "Categoría", "Categoria") or "").strip()
 
         total_egr += monto
         if cat.lower() == "ahorro":
@@ -159,7 +175,6 @@ def build_resumen_mes(gc, uid: int) -> str:
             gastos_por_categoria[cat] += monto
 
     balance = total_ing - total_egr
-
     top = sorted(gastos_por_categoria.items(), key=lambda x: x[1], reverse=True)[:6]
     top_txt = "\n".join([f"- {c}: {v:,.2f}" for c, v in top]) if top else "- (sin egresos aún)"
 
@@ -171,6 +186,7 @@ def build_resumen_mes(gc, uid: int) -> str:
         f"Balance: {balance:,.2f}\n\n"
         f"Top gastos (sin Ahorro):\n{top_txt}"
     )
+
 
 def build_resumen_semana(gc, uid: int) -> str:
     sh = get_sheet_for_user(gc, uid)
@@ -188,17 +204,17 @@ def build_resumen_semana(gc, uid: int) -> str:
     gastos_por_categoria = defaultdict(float)
 
     for r in ing_rows:
-        f = parse_fecha(r.get("FECHA"))
+        f = parse_fecha(pick(r, "FECHA", "Fecha"))
         if not f or not (start <= f < end):
             continue
-        total_ing += to_float(r.get("MONTO"))
+        total_ing += to_float(pick(r, "MONTO", "Monto"))
 
     for r in egr_rows:
-        f = parse_fecha(r.get("FECHA"))
+        f = parse_fecha(pick(r, "FECHA", "Fecha"))
         if not f or not (start <= f < end):
             continue
-        monto = to_float(r.get("MONTO"))
-        cat = str(r.get("CATEGORÍA", "")).strip()
+        monto = to_float(pick(r, "MONTO", "Monto"))
+        cat = str(pick(r, "CATEGORÍA", "CATEGORIA", "Categoría", "Categoria") or "").strip()
         total_egr += monto
         if cat.lower() != "ahorro":
             gastos_por_categoria[cat] += monto
@@ -274,6 +290,22 @@ def render_summary(data):
             f"Banco: {data.get('banco','')}\n"
             f"Nota: {data.get('nota','')}"
         )
+    
+
+def norm(s: str) -> str:
+    s = str(s).strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    return s
+
+def pick(row: dict, *candidates: str):
+    # Busca por nombre normalizado (sin tildes, sin espacios, lowercase)
+    nrow = {norm(k): v for k, v in row.items()}
+    for c in candidates:
+        key = norm(c)
+        if key in nrow:
+            return nrow[key]
+    return None
+
 # =========================
 # STATE
 # =========================
@@ -366,9 +398,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cb.startswith("DATE:"):
         opt = cb.split(":")[1]
         if opt == "HOY":
-            data["fecha"] = datetime.now().strftime("%Y-%m-%d")
+            data["fecha"] = datetime.now(TZ).strftime("%Y-%m-%d")
         elif opt == "AYER":
-            data["fecha"] = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            data["fecha"] = (datetime.now(TZ) - timedelta(days=1)).strftime("%Y-%m-%d")
         else:
             st["step"] = "wait_date"
             await q.edit_message_text("Escribe la fecha YYYY-MM-DD")
