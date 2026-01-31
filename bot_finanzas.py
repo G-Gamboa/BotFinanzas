@@ -39,7 +39,7 @@ METODOS = ["Efectivo", "Transferencia", "Osmo", "Ugly"]
 BANCOS = ["BI", "Banrural", "Nexa", "Zigi","GyT"]
 
 CATEG_EGR = [
-    "Agua", "Internet", "Transporte", "Comida","Casa", "Chatarra", "Supermercado",
+    "Agua", "Internet", "Transporte", "Comida","Casa", "Chatarra", "Supermercado", "Estudios",
     "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos","Suscripciones","Salidas","Regalos","Otros"
 ]
 
@@ -632,3 +632,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
