@@ -243,9 +243,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["nota"] = "" if txt == "-" else txt
         st["step"] = "confirm"
         await update.message.reply_text(
-            "Confirmar",
+            render_summary(data),
             reply_markup=kb_confirm()
         )
+
 
 # =========================
 # SAVE
@@ -265,6 +266,30 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data):
             data["fecha"], data["categoria"],
             data["monto"], data["metodo"], data["banco"], data["nota"]
         ], value_input_option="USER_ENTERED")
+
+def render_summary(data):
+    if data["tipo"] == "ING":
+        return (
+            "Resumen:\n"
+            f"Fecha: {data.get('fecha','')}\n"
+            f"Fuente: {data.get('fuente','')}\n"
+            f"Categoría: {data.get('categoria','')}\n"
+            f"Monto: {data.get('monto','')}\n"
+            f"Método: {data.get('metodo','')}\n"
+            f"Banco: {data.get('banco','')}\n"
+            f"Nota: {data.get('nota','')}"
+        )
+    else:
+        return (
+            "Resumen:\n"
+            f"Fecha: {data.get('fecha','')}\n"
+            f"Categoría: {data.get('categoria','')}\n"
+            f"Monto: {data.get('monto','')}\n"
+            f"Método: {data.get('metodo','')}\n"
+            f"Banco: {data.get('banco','')}\n"
+            f"Nota: {data.get('nota','')}"
+        )
+
 
 # =========================
 # MAIN
