@@ -420,39 +420,53 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sh = get_sheet_for_user(gc, update.effective_user.id)
         ws = sh.worksheet(SHEET_RESUMEN)
 
-        # Lee columnas completas (incluye fila 1)
         cuentas = ws.col_values(1)  # A
-        saldos = ws.col_values(4)   # D
+        saldos  = ws.col_values(4)  # D
 
-        # Emparejar (hasta el máximo de filas que existan en ambas)
         n = min(len(cuentas), len(saldos))
 
-        filas = []
+        pares = []
         for i in range(n):
-            cta = cuentas[i].strip() if i < len(cuentas) else ""
-            sal = saldos[i].strip() if i < len(saldos) else ""
+            cta = (cuentas[i] or "").strip()
+            sal = (saldos[i] or "").strip()
 
-            # Saltar vacíos
             if not cta and not sal:
                 continue
 
-            # Opcional: saltar encabezados si tu fila 1 dice "Cuenta" y "Saldo"
+            # saltar encabezados típicos
             if i == 0 and cta.lower() in ("cuenta", "cuentas") and sal.lower() in ("saldo", "saldos"):
                 continue
 
-            # Solo mostrar si hay cuenta
             if cta:
-                filas.append(f"- {cta}: {sal}")
+                pares.append((cta, sal))
 
-        if not filas:
+        if not pares:
             await update.message.reply_text("No encontré datos en Resumen (col A y D).")
             return
 
-        msg = "Balance:\n" + "\n".join(filas)
-        await update.message.reply_text(msg)
+        # ancho de columnas (con mínimos para que se vea bonito)
+        w_cta = max(len("Cuenta"), max(len(c) for c, _ in pares))
+        w_sal = max(len("Saldo"),  max(len(s) for _, s in pares))
+
+        top = f"┌{'─'*(w_cta+2)}┬{'─'*(w_sal+2)}┐"
+        hdr = f"│ {'Cuenta'.ljust(w_cta)} │ {'Saldo'.ljust(w_sal)} │"
+        mid = f"├{'─'*(w_cta+2)}┼{'─'*(w_sal+2)}┤"
+        rows = [
+            f"│ {c.ljust(w_cta)} │ {s.ljust(w_sal)} │"
+            for c, s in pares
+        ]
+        bot = f"└{'─'*(w_cta+2)}┴{'─'*(w_sal+2)}┘"
+
+        table = "\n".join([top, hdr, mid, *rows, bot])
+
+        await update.message.reply_text(
+            f"<b>Balance</b>\n<pre>{table}</pre>",
+            parse_mode="HTML"
+        )
 
     except Exception as e:
         await update.message.reply_text(f"No pude leer la hoja 'Resumen'. Error: {e}")
+
 
 
 # =========================
@@ -697,3 +711,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
