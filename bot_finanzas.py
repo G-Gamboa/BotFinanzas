@@ -96,7 +96,11 @@ def st_reset(context: ContextTypes.DEFAULT_TYPE):
 
 def allowed(update: Update) -> bool:
     uid = update.effective_user.id if update.effective_user else None
+    # permitir /whoami a cualquiera
+    if update.message and update.message.text == "/whoami":
+        return True
     return uid in ALLOWED_USER_IDS
+
 
 # =========================
 # GOOGLE SHEETS
@@ -314,3 +318,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
