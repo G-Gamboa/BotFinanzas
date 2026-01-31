@@ -116,10 +116,36 @@ def parse_fecha(value):
     return None
 
 def to_float(value) -> float:
-    try:
-        return float(str(value).replace(",", "."))
-    except Exception:
+    if value is None:
         return 0.0
+
+    # Si Sheets ya devuelve número (a veces pasa)
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip()
+
+    # Elimina moneda (Q), espacios y cualquier cosa rara
+    # Deja solo dígitos, punto, coma y signo menos
+    s = re.sub(r"[^0-9.,\-]", "", s)
+
+    if not s:
+        return 0.0
+
+    # Formato Guatemala: 7.000,00
+    if "." in s and "," in s:
+        s = s.replace(".", "")   # quita separadores de miles
+        s = s.replace(",", ".")  # coma decimal → punto
+
+    # Otros casos: solo coma → decimal
+    elif "," in s:
+        s = s.replace(",", ".")
+
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
 
 def month_range(today: date):
     start = today.replace(day=1)
@@ -556,3 +582,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
