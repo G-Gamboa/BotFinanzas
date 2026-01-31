@@ -29,13 +29,14 @@ SERVICE_ACCOUNT_INFO = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
 SHEET_INGRESOS = "Ingresos"
 SHEET_EGRESOS = "Egresos"
 SHEET_MOVIMIENTOS = "Movimientos"
+SHEET_RESUMEN = "Resumen"
 
 # =========================
 # CATÁLOGOS (BOTONES)
 # =========================
 FUENTES_ING = ["Trabajo", "Freelance", "Negocios"]
 CATEG_ING = ["Salario", "Proyecto", "Inversiones", "Ventas", "Otros"]
-METODOS = ["Efectivo", "Transferencia", "Osmo", "Ugly"]
+METODOS = ["Efectivo", "Transferencia", "Osmo", "Ugly","Binance"]
 BANCOS = ["BI", "Banrural", "Nexa", "Zigi","GyT"]
 
 CATEG_EGR = [
@@ -43,7 +44,7 @@ CATEG_EGR = [
     "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos","Suscripciones","Salidas","Regalos","Otros"
 ]
 
-CUENTAS = ["Efectivo", "BI", "Banrural", "Nexa", "Zigi", "GyT", "Osmo", "Ugly"]
+CUENTAS = ["Efectivo", "BI", "Banrural", "Nexa", "Zigi", "GyT", "Osmo", "Ugly","Binance"]
 
 # =========================
 # HELPERS UI
@@ -409,6 +410,51 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"No pude generar el resumen. Error: {e}")
 
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    try:
+        sh = get_sheet_for_user(gc, update.effective_user.id)
+        ws = sh.worksheet(SHEET_RESUMEN)
+
+        # Lee columnas completas (incluye fila 1)
+        cuentas = ws.col_values(1)  # A
+        saldos = ws.col_values(4)   # D
+
+        # Emparejar (hasta el máximo de filas que existan en ambas)
+        n = min(len(cuentas), len(saldos))
+
+        filas = []
+        for i in range(n):
+            cta = cuentas[i].strip() if i < len(cuentas) else ""
+            sal = saldos[i].strip() if i < len(saldos) else ""
+
+            # Saltar vacíos
+            if not cta and not sal:
+                continue
+
+            # Opcional: saltar encabezados si tu fila 1 dice "Cuenta" y "Saldo"
+            if i == 0 and cta.lower() in ("cuenta", "cuentas") and sal.lower() in ("saldo", "saldos"):
+                continue
+
+            # Solo mostrar si hay cuenta
+            if cta:
+                filas.append(f"- {cta}: {sal}")
+
+        if not filas:
+            await update.message.reply_text("No encontré datos en Resumen (col A y D).")
+            return
+
+        msg = "Balance:\n" + "\n".join(filas)
+        await update.message.reply_text(msg)
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude leer la hoja 'Resumen'. Error: {e}")
+
+
 # =========================
 # CALLBACKS
 # =========================
@@ -638,6 +684,8 @@ def main():
     app.add_handler(CommandHandler("cancelar", cancelar))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("resumen", resumen))
+    app.add_handler(CommandHandler("balance", balance))
+
 
 
     app.add_handler(CallbackQueryHandler(on_cb))
