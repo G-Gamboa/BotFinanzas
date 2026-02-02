@@ -534,6 +534,121 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"No pude leer la hoja 'Resumen'. Error: {e}")
 
 
+def resolve_cuenta_from_row(row: dict, cats: dict | None, tipo: str) -> str:
+    """
+    Determina a qué 'cuenta' impacta una fila de Ingresos/Egresos.
+    tipo: 'ING' o 'EGR'
+    """
+    metodo = str(pick(row, "MÉTODO", "METODO", "Metodo", "Método") or "").strip()
+    banco  = str(pick(row, "BANCO", "Banco") or "").strip()
+
+    # Normaliza
+    m_low = metodo.lower()
+
+    if m_low == "transferencia":
+        return banco or "Transferencia"
+    # Efectivo y wallets/métodos cuentan como cuenta en opción 1
+    return metodo or "(sin método)"
+
+def format_money_q(value: float) -> str:
+    # Formato estilo Q con miles y 2 decimales (salida visual)
+    # Ej: 1234.5 -> Q 1,234.50
+    return f"Q {value:,.2f}"
+
+def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]:
+    sh = get_sheet_for_user(gc, uid)
+
+    ws_ing = sh.worksheet(SHEET_INGRESOS)
+    ws_egr = sh.worksheet(SHEET_EGRESOS)
+    ws_mov = sh.worksheet(SHEET_MOVIMIENTOS)
+
+    ing_rows = ws_ing.get_all_records()
+    egr_rows = ws_egr.get_all_records()
+    mov_rows = ws_mov.get_all_records()
+
+    saldos = defaultdict(float)
+
+    # Ingresos: suma
+    for r in ing_rows:
+        cuenta = resolve_cuenta_from_row(r, None, "ING")
+        monto = to_float(pick(r, "MONTO", "Monto"))
+        if cuenta:
+            saldos[cuenta] += monto
+
+    # Egresos: resta
+    for r in egr_rows:
+        cuenta = resolve_cuenta_from_row(r, None, "EGR")
+        monto = to_float(pick(r, "MONTO", "Monto"))
+        if cuenta:
+            saldos[cuenta] -= monto
+
+    # Movimientos: - remitente, + destino
+    for r in mov_rows:
+        rem = str(pick(r, "REMITENTE", "Remitente") or "").strip()
+        des = str(pick(r, "DESTINO", "Destino") or "").strip()
+        monto = to_float(pick(r, "MONTO", "Monto"))
+
+        if rem:
+            saldos[rem] -= monto
+        if des:
+            saldos[des] += monto
+
+    # Asegurar que existan todas las cuentas conocidas (aunque estén en 0)
+    for c in cuentas:
+        saldos[c] += 0.0
+
+    return saldos
+
+async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    # Aseguramos que catálogos/cuentas estén cargados para este usuario
+    if "catalogos" not in context.user_data or "cuentas" not in context.user_data:
+        sh = get_sheet_for_user(gc, update.effective_user.id)
+        cats = load_catalogos(sh)
+        context.user_data["catalogos"] = cats
+        context.user_data["cuentas"] = build_cuentas_from_catalogos(cats)
+
+    cuentas = context.user_data.get("cuentas", CUENTAS)
+
+    try:
+        saldos_map = build_saldos_dinamicos(gc, update.effective_user.id, cuentas)
+
+        # Ordenar por saldo desc
+        items = sorted(saldos_map.items(), key=lambda x: x[1], reverse=True)
+
+        # Preparar tabla bonita (monoespaciada)
+        pares = [(c, format_money_q(v)) for c, v in items if c and abs(v) > 0.000001]
+
+        if not pares:
+            await update.message.reply_text("No hay movimientos suficientes para calcular saldos aún.")
+            return
+
+        w_cta = max(len("Cuenta"), max(len(c) for c, _ in pares))
+        w_sal = max(len("Saldo"),  max(len(s) for _, s in pares))
+
+        top = f"┌{'─'*(w_cta+2)}┬{'─'*(w_sal+2)}┐"
+        hdr = f"│ {'Cuenta'.ljust(w_cta)} │ {'Saldo'.rjust(w_sal)} │"
+        mid = f"├{'─'*(w_cta+2)}┼{'─'*(w_sal+2)}┤"
+        rows = [
+            f"│ {c.ljust(w_cta)} │ {s.rjust(w_sal)} │"
+            for c, s in pares
+        ]
+        bot = f"└{'─'*(w_cta+2)}┴{'─'*(w_sal+2)}┘"
+
+        table = "\n".join([top, hdr, mid, *rows, bot])
+
+        await update.message.reply_text(
+            f"<b>Saldos (dinámico)</b>\n<pre>{table}</pre>",
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude calcular saldos. Error: {e}")
+
 
 # =========================
 # CALLBACKS
@@ -802,6 +917,8 @@ def main():
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("resumen", resumen))
     app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(CommandHandler("saldos", saldos))
+
 
 
 
