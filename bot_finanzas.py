@@ -37,7 +37,7 @@ SHEET_CATEGORIAS = "Categorías"
 # =========================
 FUENTES_ING = ["Trabajo", "Freelance", "Negocios"]
 CATEG_ING = ["Salario", "Proyecto", "Inversiones", "Ventas", "Otros"]
-METODOS = ["Efectivo", "Transferencia", "Osmo", "Ugly","Binance"]
+METODOS = ["Efectivo", "Transferencia"]
 BANCOS = ["BI", "Banrural", "Nexa", "Zigi","GyT"]
 
 CATEG_EGR = [
@@ -45,7 +45,7 @@ CATEG_EGR = [
     "Mercado", "Entretenimiento", "Salud", "Ahorro", "Ropa", "Zapatos","Suscripciones","Salidas","Regalos","Otros"
 ]
 
-CUENTAS = ["Efectivo", "BI", "Banrural", "Nexa", "Zigi", "GyT", "Osmo", "Ugly","Binance"]
+CUENTAS = ["Efectivo", "BI", "Banrural", "Nexa", "Zigi", "GyT"]
 
 # =========================
 # HELPERS UI
@@ -642,7 +642,7 @@ async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         table = "\n".join([top, hdr, mid, *rows, bot])
 
         await update.message.reply_text(
-            f"<b>Saldos (dinámico)</b>\n<pre>{table}</pre>",
+            f"<b>Saldos</b>\n<pre>{table}</pre>",
             parse_mode="HTML"
         )
 
