@@ -127,6 +127,28 @@ def load_catalogos(sh):
         "CATEG_EGR": categ_egr,
     }
 
+def build_cuentas_from_catalogos(cats: dict) -> list[str]:
+    """
+    Construye la lista de CUENTAS a partir de:
+    - Bancos
+    - Métodos (excepto 'Transferencia')
+    """
+    cuentas = set()
+
+    # Bancos siempre cuentan
+    for b in cats.get("BANCOS", []):
+        if b:
+            cuentas.add(b)
+
+    # Métodos, excepto Transferencia
+    for m in cats.get("METODOS", []):
+        if m and m.lower() != "transferencia":
+            cuentas.add(m)
+
+    # Orden alfabético para UX consistente
+    return sorted(cuentas)
+
+
 def get_catalogos(context: ContextTypes.DEFAULT_TYPE):
     """
     Devuelve el diccionario de catálogos ya cargado en context.user_data.
@@ -428,7 +450,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     gc = context.application.bot_data["gc"]
     sh = get_sheet_for_user(gc, update.effective_user.id)
-    context.user_data["catalogos"] = load_catalogos(sh)
+
+    cats = load_catalogos(sh)
+    context.user_data["catalogos"] = cats
+    context.user_data["cuentas"] = build_cuentas_from_catalogos(cats)
 
     st_reset(context)
     await update.message.reply_text("¿Qué quieres registrar?", reply_markup=kb_main())
@@ -559,9 +584,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             categ_egr = cats["CATEG_EGR"] if cats else CATEG_EGR
             await q.edit_message_text("Categoría:", reply_markup=kb_list(categ_egr, "CAT"))
 
-        else:  # MOV
+        elif data["tipo"] == "MOV":
             st["step"] = "remitente"
-            await q.edit_message_text("Remitente (de dónde sale):", reply_markup=kb_list(CUENTAS, "FROM"))
+            cuentas = context.user_data.get("cuentas", CUENTAS)
+            await q.edit_message_text(
+                "Remitente (de dónde sale):",
+                reply_markup=kb_list(cuentas, "FROM")
+            )
 
         return
 
@@ -609,7 +638,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cb.startswith("FROM:"):
         data["remitente"] = cb.split(":", 1)[1]
         st["step"] = "destino"
-        await q.edit_message_text("Destino (a dónde entra):", reply_markup=kb_list(CUENTAS, "TO"))
+        cuentas = context.user_data.get("cuentas", CUENTAS)
+        await q.edit_message_text(
+            "Destino (a dónde entra):",
+            reply_markup=kb_list(cuentas, "TO")
+        )
+
         return
 
     if cb.startswith("TO:"):
@@ -646,9 +680,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             st["step"] = "categoria"
             categ_egr = cats["CATEG_EGR"] if cats else CATEG_EGR
             await update.message.reply_text("Categoría:", reply_markup=kb_list(categ_egr, "CAT"))
-        else:  # MOV
+        elif data["tipo"] == "MOV":
             st["step"] = "remitente"
-            await update.message.reply_text("Remitente (de dónde sale):", reply_markup=kb_list(CUENTAS, "FROM"))
+            cuentas = context.user_data.get("cuentas", CUENTAS)
+            await update.message.reply_text(
+                "Remitente (de dónde sale):",
+                reply_markup=kb_list(cuentas, "FROM")
+            )
+
         return
 
 
