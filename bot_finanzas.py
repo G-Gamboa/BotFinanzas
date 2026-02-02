@@ -30,6 +30,7 @@ SHEET_INGRESOS = "Ingresos"
 SHEET_EGRESOS = "Egresos"
 SHEET_MOVIMIENTOS = "Movimientos"
 SHEET_RESUMEN = "Resumen"
+SHEET_CATEGORIAS = "Categorías"
 
 # =========================
 # CATÁLOGOS (BOTONES)
@@ -99,6 +100,43 @@ def get_sheet_for_user(gc, uid: int):
     if not sheet_id:
         raise RuntimeError("Tu usuario no tiene Sheet configurado.")
     return gc.open_by_key(sheet_id)
+
+def col_clean(values):
+    # values incluye encabezado en fila 1, por eso usamos [1:]
+    out = []
+    for v in values[1:]:
+        v = (v or "").strip()
+        if v:
+            out.append(v)
+    return out
+
+def load_catalogos(sh):
+    ws = sh.worksheet(SHEET_CATEGORIAS)
+
+    fuentes_ing = col_clean(ws.col_values(1))     # A
+    categ_ing   = col_clean(ws.col_values(2))     # B
+    metodos     = col_clean(ws.col_values(3))     # C
+    bancos      = col_clean(ws.col_values(4))     # D
+    categ_egr   = col_clean(ws.col_values(5))     # E
+
+    return {
+        "FUENTES_ING": fuentes_ing,
+        "CATEG_ING": categ_ing,
+        "METODOS": metodos,
+        "BANCOS": bancos,
+        "CATEG_EGR": categ_egr,
+    }
+
+def get_catalogos(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Devuelve el diccionario de catálogos ya cargado en context.user_data.
+    Si no existe (o está vacío), devuelve None.
+    """
+    cats = context.user_data.get("catalogos")
+    if isinstance(cats, dict) and cats:
+        return cats
+    return None
+
 
 def parse_fecha(value):
     if value is None:
@@ -387,11 +425,14 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return
+
+    gc = context.application.bot_data["gc"]
+    sh = get_sheet_for_user(gc, update.effective_user.id)
+    context.user_data["catalogos"] = load_catalogos(sh)
+
     st_reset(context)
-    await update.message.reply_text(
-        "¿Qué quieres registrar?",
-        reply_markup=kb_main()
-    )
+    await update.message.reply_text("¿Qué quieres registrar?", reply_markup=kb_main())
+
 
 async def nuevo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
@@ -508,10 +549,16 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if data["tipo"] == "ING":
             st["step"] = "fuente"
-            await q.edit_message_text("Fuente:", reply_markup=kb_list(FUENTES_ING, "SRC"))
+            cats = get_catalogos(context)
+            fuentes = cats["FUENTES_ING"] if cats else FUENTES_ING
+            await q.edit_message_text("Fuente:", reply_markup=kb_list(fuentes, "SRC"))
+
         elif data["tipo"] == "EGR":
             st["step"] = "categoria"
-            await q.edit_message_text("Categoría:", reply_markup=kb_list(CATEG_EGR, "CAT"))
+            cats = get_catalogos(context)
+            categ_egr = cats["CATEG_EGR"] if cats else CATEG_EGR
+            await q.edit_message_text("Categoría:", reply_markup=kb_list(categ_egr, "CAT"))
+
         else:  # MOV
             st["step"] = "remitente"
             await q.edit_message_text("Remitente (de dónde sale):", reply_markup=kb_list(CUENTAS, "FROM"))
@@ -521,7 +568,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cb.startswith("SRC:"):
         data["fuente"] = cb.split(":")[1]
         st["step"] = "categoria"
-        await q.edit_message_text("Categoría:", reply_markup=kb_list(CATEG_ING, "CAT"))
+        cats = get_catalogos(context)
+        categ_ing = cats["CATEG_ING"] if cats else CATEG_ING
+        await q.edit_message_text("Categoría:", reply_markup=kb_list(categ_ing, "CAT"))
+
         return
 
     if cb.startswith("CAT:"):
@@ -534,7 +584,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["metodo"] = cb.split(":")[1]
         if data["metodo"] == "Transferencia":
             st["step"] = "banco"
-            await q.edit_message_text("Banco:", reply_markup=kb_list(BANCOS, "BANK"))
+            cats = get_catalogos(context)
+            bancos = cats["BANCOS"] if cats else BANCOS
+            await q.edit_message_text("Banco:", reply_markup=kb_list(bancos, "BANK"))
+
         else:
             data["banco"] = ""
             st["step"] = "nota"
@@ -583,13 +636,21 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "wait_date":
         data["fecha"] = txt
+        cats = get_catalogos(context)
+
         if data["tipo"] == "ING":
             st["step"] = "fuente"
-            await update.message.reply_text("Fuente:", reply_markup=kb_list(FUENTES_ING, "SRC"))
-        else:
+            fuentes = cats["FUENTES_ING"] if cats else FUENTES_ING
+            await update.message.reply_text("Fuente:", reply_markup=kb_list(fuentes, "SRC"))
+        elif data["tipo"] == "EGR":
             st["step"] = "categoria"
-            await update.message.reply_text("Categoría:", reply_markup=kb_list(CATEG_EGR, "CAT"))
+            categ_egr = cats["CATEG_EGR"] if cats else CATEG_EGR
+            await update.message.reply_text("Categoría:", reply_markup=kb_list(categ_egr, "CAT"))
+        else:  # MOV
+            st["step"] = "remitente"
+            await update.message.reply_text("Remitente (de dónde sale):", reply_markup=kb_list(CUENTAS, "FROM"))
         return
+
 
     if step == "monto":
         raw = txt.strip()
@@ -615,7 +676,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Nota (o -):")
         else:
             st["step"] = "metodo"
-            await update.message.reply_text("Método:", reply_markup=kb_list(METODOS, "PAY"))
+            cats = get_catalogos(context)
+            metodos = cats["METODOS"] if cats else METODOS
+            await update.message.reply_text("Método:", reply_markup=kb_list(metodos, "PAY"))
+
         return
 
 
