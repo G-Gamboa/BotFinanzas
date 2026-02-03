@@ -124,7 +124,7 @@ def load_catalogos(sh):
         "CATEG_ING": categ_ing,
         "METODOS": metodos,
         "BANCOS": bancos,
-        "CATEG_EGR": categ_egr,
+        "CATEG_EGR": sorted(categ_egr),
     }
 
 def build_cuentas_from_catalogos(cats: dict) -> list[str]:
