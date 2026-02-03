@@ -120,12 +120,28 @@ def load_catalogos(sh):
     categ_egr   = col_clean(ws.col_values(5))     # E
 
     return {
-        "FUENTES_ING": fuentes_ing,
-        "CATEG_ING": categ_ing,
-        "METODOS": metodos,
-        "BANCOS": bancos,
-        "CATEG_EGR": sorted(categ_egr),
+        "FUENTES_ING": sort_with_priorities(fuentes_ing),
+        "CATEG_ING": sort_with_priorities(categ_ing),
+        "METODOS": sort_with_priorities(metodos),
+        "BANCOS": sort_with_priorities(bancos),
+        "CATEG_EGR": sort_with_priorities(categ_egr),
     }
+
+
+def sort_with_priorities(items):
+    def key(x):
+        v = x.strip().lower()
+
+        if v == "efectivo":
+            return (0, "")      
+        if v == "otros":
+            return (2, "")      
+
+        return (1, v)          
+
+    return sorted(items, key=key)
+
+
 
 def build_cuentas_from_catalogos(cats: dict) -> list[str]:
     """
