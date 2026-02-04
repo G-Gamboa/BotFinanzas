@@ -584,21 +584,37 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
 
     saldos = defaultdict(float)
 
-    # Ingresos: suma
+    # INGRESOS → sumar, excepto Inversiones
     for r in ing_rows:
+        categoria = str(
+            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
+        ).strip().lower()
+
+        if categoria == "inversiones":
+            continue  # ⬅️ no es dinero líquido
+
         cuenta = resolve_cuenta_from_row(r, None, "ING")
         monto = to_float(pick(r, "MONTO", "Monto"))
+
         if cuenta:
             saldos[cuenta] += monto
 
-    # Egresos: resta
+    # EGRESOS → restar, excepto Ahorro
     for r in egr_rows:
+        categoria = str(
+            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
+        ).strip().lower()
+
+        if categoria == "ahorro":
+            continue  # ⬅️ no es gasto real
+
         cuenta = resolve_cuenta_from_row(r, None, "EGR")
         monto = to_float(pick(r, "MONTO", "Monto"))
+
         if cuenta:
             saldos[cuenta] -= monto
 
-    # Movimientos: - remitente, + destino
+    # MOVIMIENTOS → transferencias internas
     for r in mov_rows:
         rem = str(pick(r, "REMITENTE", "Remitente") or "").strip()
         des = str(pick(r, "DESTINO", "Destino") or "").strip()
@@ -609,11 +625,66 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
         if des:
             saldos[des] += monto
 
-    # Asegurar que existan todas las cuentas conocidas (aunque estén en 0)
+    # Asegurar todas las cuentas
     for c in cuentas:
         saldos[c] += 0.0
 
     return saldos
+
+async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    try:
+        a, inv = build_ahorro_inversiones(gc, update.effective_user.id)
+        total = a + inv
+
+        msg = (
+            "<b>Ahorro</b>\n"
+            f"- Ahorro acumulado: {format_money_q(a)}\n"
+            f"- Inversiones acumuladas: {format_money_q(inv)}\n"
+            f"\n<b>Total (Ahorro + Inversiones):</b> {format_money_q(total)}"
+        )
+
+        await update.message.reply_text(msg, parse_mode="HTML")
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude calcular ahorro. Error: {e}")
+
+def build_ahorro_inversiones(gc, uid: int) -> tuple[float, float]:
+    sh = get_sheet_for_user(gc, uid)
+
+    ws_ing = sh.worksheet(SHEET_INGRESOS)
+    ws_egr = sh.worksheet(SHEET_EGRESOS)
+
+    ing_rows = ws_ing.get_all_records()
+    egr_rows = ws_egr.get_all_records()
+
+    ahorro = 0.0
+    inversiones = 0.0
+
+    # Ahorro → EGRESOS
+    for r in egr_rows:
+        categoria = str(
+            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
+        ).strip().lower()
+
+        if categoria == "ahorro":
+            ahorro += to_float(pick(r, "MONTO", "Monto"))
+
+    # Inversiones → INGRESOS
+    for r in ing_rows:
+        categoria = str(
+            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
+        ).strip().lower()
+
+        if categoria == "inversiones":
+            inversiones += to_float(pick(r, "MONTO", "Monto"))
+
+    return ahorro, inversiones
+
 
 async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
@@ -934,8 +1005,7 @@ def main():
     app.add_handler(CommandHandler("resumen", resumen))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("saldos", saldos))
-
-
+    app.add_handler(CommandHandler("ahorro", ahorro))
 
 
     app.add_handler(CallbackQueryHandler(on_cb))
