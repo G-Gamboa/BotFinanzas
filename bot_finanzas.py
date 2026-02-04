@@ -32,6 +32,9 @@ SHEET_MOVIMIENTOS = "Movimientos"
 SHEET_RESUMEN = "Resumen"
 SHEET_CATEGORIAS = "Categorías"
 
+USD_TO_GTQ = 7.7
+
+
 # =========================
 # CATÁLOGOS (BOTONES)
 # =========================
@@ -635,14 +638,16 @@ async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gc = context.application.bot_data["gc"]
 
     try:
-        a, inv = build_ahorro_inversiones(gc, update.effective_user.id)
-        total = a + inv
+        ahorro_gtq, inv_usd, total_gtq = build_ahorro_inversiones(
+            gc, update.effective_user.id
+        )
 
         msg = (
-            "<b>Ahorro</b>\n"
-            f"- Ahorro acumulado: {format_money_q(a)}\n"
-            f"- Inversiones acumuladas: {format_money_q(inv)}\n"
-            f"\n<b>Total (Ahorro + Inversiones):</b> {format_money_q(total)}"
+            "<b>Ahorro / Inversiones</b>\n"
+            f"- Ahorro acumulado: {format_money_q(ahorro_gtq)}\n"
+            f"- Inversiones acumuladas: ${inv_usd:,.2f} USD\n"
+            f"\n<b>Total patrimonial (GTQ):</b> {format_money_q(total_gtq)}\n"
+            f"<i>TC usado: {USD_TO_GTQ}</i>"
         )
 
         await update.message.reply_text(msg, parse_mode="HTML")
@@ -650,7 +655,14 @@ async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"No pude calcular ahorro. Error: {e}")
 
-def build_ahorro_inversiones(gc, uid: int) -> tuple[float, float]:
+
+def build_ahorro_inversiones(gc, uid: int) -> tuple[float, float, float]:
+    """
+    Retorna:
+    - ahorro_gtq
+    - inversiones_usd
+    - total_gtq (ahorro + inversiones convertidas)
+    """
     sh = get_sheet_for_user(gc, uid)
 
     ws_ing = sh.worksheet(SHEET_INGRESOS)
@@ -659,28 +671,31 @@ def build_ahorro_inversiones(gc, uid: int) -> tuple[float, float]:
     ing_rows = ws_ing.get_all_records()
     egr_rows = ws_egr.get_all_records()
 
-    ahorro = 0.0
-    inversiones = 0.0
+    ahorro_gtq = 0.0
+    inversiones_usd = 0.0
 
-    # Ahorro → EGRESOS
+    # Ahorro → EGRESOS (GTQ)
     for r in egr_rows:
         categoria = str(
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
         if categoria == "ahorro":
-            ahorro += to_float(pick(r, "MONTO", "Monto"))
+            ahorro_gtq += to_float(pick(r, "MONTO", "Monto"))
 
-    # Inversiones → INGRESOS
+    # Inversiones → INGRESOS (USD)
     for r in ing_rows:
         categoria = str(
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
         if categoria == "inversiones":
-            inversiones += to_float(pick(r, "MONTO", "Monto"))
+            inversiones_usd += to_float(pick(r, "MONTO", "Monto"))
 
-    return ahorro, inversiones
+    total_gtq = ahorro_gtq + (inversiones_usd * USD_TO_GTQ)
+
+    return ahorro_gtq, inversiones_usd, total_gtq
+
 
 
 async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
