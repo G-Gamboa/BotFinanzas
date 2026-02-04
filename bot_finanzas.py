@@ -605,9 +605,6 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
-        if categoria == "ahorro":
-            continue  # ⬅️ no es gasto real
-
         cuenta = resolve_cuenta_from_row(r, None, "EGR")
         monto = to_float(pick(r, "MONTO", "Monto"))
 
