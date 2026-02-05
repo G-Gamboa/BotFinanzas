@@ -587,34 +587,57 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
 
     saldos = defaultdict(float)
 
-    # INGRESOS → sumar, excepto Inversiones
+    # =========================
+    # INGRESOS → SOLO NO-TRANSFERENCIA y NO INVERSIONES
+    # =========================
     for r in ing_rows:
         categoria = str(
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
-        if categoria == "inversiones":
-            continue  # ⬅️ no es dinero líquido
+        metodo = str(
+            pick(r, "MÉTODO", "METODO", "Metodo", "Método") or ""
+        ).strip().lower()
 
-        cuenta = resolve_cuenta_from_row(r, None, "ING")
+        if categoria == "inversiones":
+            continue  # no es dinero líquido
+
+        if metodo == "transferencia":
+            continue  # ⚠️ las transferencias se reflejan SOLO en Movimientos
+
+        cuenta = metodo
         monto = to_float(pick(r, "MONTO", "Monto"))
 
         if cuenta:
             saldos[cuenta] += monto
 
-    # EGRESOS → restar, excepto Ahorro
+    # =========================
+    # EGRESOS → SOLO NO-TRANSFERENCIA y NO AHORRO
+    # =========================
     for r in egr_rows:
         categoria = str(
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
-        cuenta = resolve_cuenta_from_row(r, None, "EGR")
+        metodo = str(
+            pick(r, "MÉTODO", "METODO", "Metodo", "Método") or ""
+        ).strip().lower()
+
+        if categoria == "ahorro":
+            continue  # el ahorro se ve en /ahorro
+
+        if metodo == "transferencia":
+            continue  # ⚠️ también se refleja SOLO en Movimientos
+
+        cuenta = metodo
         monto = to_float(pick(r, "MONTO", "Monto"))
 
         if cuenta:
             saldos[cuenta] -= monto
 
-    # MOVIMIENTOS → transferencias internas
+    # =========================
+    # MOVIMIENTOS → ÚNICA fuente de cambios entre cuentas
+    # =========================
     for r in mov_rows:
         rem = str(pick(r, "REMITENTE", "Remitente") or "").strip()
         des = str(pick(r, "DESTINO", "Destino") or "").strip()
@@ -625,11 +648,14 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
         if des:
             saldos[des] += monto
 
+    # =========================
     # Asegurar todas las cuentas
+    # =========================
     for c in cuentas:
         saldos[c] += 0.0
 
     return saldos
+
 
 async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
