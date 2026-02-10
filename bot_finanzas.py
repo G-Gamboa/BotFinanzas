@@ -820,32 +820,36 @@ def build_saldos_dinamicos(
 
     return dict(saldos)
 
+def render_inversiones(inv_map: dict[str, float]) -> str:
+    items = sorted(inv_map.items(), key=lambda x: x[1], reverse=True)
+    # si quieres ocultar ceros:
+    items = [(c, v) for c, v in items if abs(v) > 1e-9]
 
+    if not items:
+        return "  - (sin inversiones aún)"
+
+    return "\n".join([f"  - {c}: ${v:,.2f}" for c, v in items])
 
 async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return
-
     gc = context.application.bot_data["gc"]
 
-    try:
-        ahorro_gtq, inv_usd, total_gtq = build_ahorro_inversiones(
-            gc, update.effective_user.id
-        )
+    ahorro_gtq, inv_map, inv_total_usd, total_gtq = build_ahorro_inversiones(gc, update.effective_user.id)
 
-        msg = (
-            "<b>Ahorro / Inversiones</b>\n"
-            f"- Ahorro acumulado: {format_money_q(ahorro_gtq)}\n"
-            f"- Inversiones acumuladas: ${inv_usd:,.2f} USD\n"
-            f"\n<b>Total patrimonial (GTQ):</b> {format_money_q(total_gtq)}\n"
-            f"<i>TC usado: {USD_TO_GTQ}</i>"
-        )
+    msg = (
+        "Ahorro / Inversiones\n"
+        f"- Ahorro (saldo): {format_money_q(ahorro_gtq)}\n"
+        f"- Inversiones (saldo): ${inv_total_usd:,.2f} USD\n"
+        "Detalle inversiones:\n"
+        f"{render_inversiones(inv_map)}\n\n"
+        f"Total patrimonial (GTQ): {format_money_q(total_gtq)}\n"
+        f"TC usado: {USD_TO_GTQ}"
+    )
+    await update.message.reply_text(msg)
 
-        await update.message.reply_text(msg, parse_mode="HTML")
 
-    except Exception as e:
-        await update.message.reply_text(f"No pude calcular ahorro. Error: {e}")
-
+from collections import defaultdict
 
 def build_ahorro_inversiones(
     gc,
@@ -853,19 +857,20 @@ def build_ahorro_inversiones(
     usd_to_gtq: float = None,
     inv_cuentas: set[str] = None,
     ahorro_cuenta: str = "Ahorro",
-) -> tuple[float, float, float]:
+) -> tuple[float, dict[str, float], float, float]:
     """
     Saldo actual:
     - ahorro_gtq: SOLO desde MOVIMIENTOS (GTQ)
-    - inversiones_usd: INGRESOS categoría "Inversiones" (USD) + MOVIMIENTOS (USD)
-    - total_gtq = ahorro_gtq + inversiones_usd * usd_to_gtq
+    - inv_map_usd: saldo USD por cuenta de inversión (Ugly/Binance/Osmo/Hapi)
+      (desde INGRESOS + MOVIMIENTOS)
+    - inv_total_usd
+    - total_gtq = ahorro_gtq + inv_total_usd * usd_to_gtq
 
-    Convención de Movimientos:
-    - Salida del remitente: MONTO
-    - Entrada al destino: MONTO_DESTINO (si existe y >0), si no MONTO
-    - Si remitente es inversión -> MONTO está en USD
-    - Si destino es inversión -> MONTO_DESTINO está en USD
-    - Si destino es GTQ -> MONTO_DESTINO está en GTQ
+    Convención MOVIMIENTOS:
+    - salida remitente = MONTO
+    - entrada destino  = MONTO_DESTINO si >0, si no MONTO
+    - Si remitente es inversión y destino GTQ -> MONTO es USD, MONTO_DESTINO es GTQ
+    - Si remitente GTQ y destino inversión -> MONTO es GTQ, MONTO_DESTINO es USD
     """
 
     if usd_to_gtq is None:
@@ -874,8 +879,8 @@ def build_ahorro_inversiones(
     if inv_cuentas is None:
         inv_cuentas = {"Ugly", "Binance", "Osmo", "Hapi"}
 
-    inv_cuentas_n = {norm_key(x) for x in inv_cuentas}
-    ahorro_cuenta_n = norm_key(ahorro_cuenta)
+    inv_set = {norm_key(x) for x in inv_cuentas}
+    ahorro_n = norm_key(ahorro_cuenta)
 
     sh = get_sheet_for_user(gc, uid)
     ws_ing = sh.worksheet(SHEET_INGRESOS)
@@ -901,10 +906,10 @@ def build_ahorro_inversiones(
         return ""
 
     ahorro_gtq = 0.0
-    inversiones_usd = 0.0
+    inv_map = defaultdict(float)  # USD por cuenta
 
     # =========================
-    # 1) Inversiones base desde INGRESOS (USD)
+    # 1) INGRESOS: inversiones por método (USD)
     # =========================
     ing_vals = ws_ing.get("A1:G")
     ing_h = build_header_map(ing_vals)
@@ -912,14 +917,24 @@ def build_ahorro_inversiones(
     for row in ing_vals[1:]:
         if not any((c or "").strip() for c in row):
             continue
+
         categoria = str(cell(row, ing_h, "CATEGORÍA", "CATEGORIA", "Categoria") or "").strip().lower()
-        if categoria == "inversiones":
-            inversiones_usd += to_float(cell(row, ing_h, "MONTO", "Monto"))
+        if categoria != "inversiones":
+            continue
+
+        metodo = str(cell(row, ing_h, "MÉTODO", "METODO", "Metodo") or "").strip()
+        cuenta_inv = canon_cuenta(metodo, cuentas_catalogo)
+        if norm_key(cuenta_inv) not in inv_set:
+            # si alguien puso "Transferencia" u otro método por error, lo ignoramos
+            continue
+
+        monto = to_float(cell(row, ing_h, "MONTO", "Monto"))
+        inv_map[cuenta_inv] += monto
 
     # =========================
-    # 2) Movimientos: saldo actual
+    # 2) MOVIMIENTOS: saldo actual (Ahorro GTQ + Inversiones USD)
     # =========================
-    mov_vals = ws_mov.get("A1:G")  # por si existe MONTO_DESTINO
+    mov_vals = ws_mov.get("A1:G")
     mov_h = build_header_map(mov_vals)
 
     for row in mov_vals[1:]:
@@ -936,28 +951,31 @@ def build_ahorro_inversiones(
         rem_n = norm_key(rem)
         des_n = norm_key(des)
 
-        monto_origen = to_float(cell(row, mov_h, "MONTO", "Monto"))  # salida del remitente
-        monto_destino = to_float(cell(row, mov_h, "MONTO_DESTINO", "Monto_destino"))  # entrada al destino
-
+        monto_origen = to_float(cell(row, mov_h, "MONTO", "Monto"))  # sale del remitente
+        monto_destino = to_float(cell(row, mov_h, "MONTO_DESTINO", "Monto_destino"))  # entra al destino
         entrada_destino = monto_destino if abs(monto_destino) > 1e-9 else monto_origen
 
-        # ---- AHORRO (GTQ) ----
-        # Ahorro es cuenta GTQ: entra con entrada_destino (GTQ), sale con monto_origen (GTQ)
-        if des_n == ahorro_cuenta_n:
+        # ---- Ahorro (GTQ) ----
+        if des_n == ahorro_n:
             ahorro_gtq += entrada_destino
-        if rem_n == ahorro_cuenta_n:
+        if rem_n == ahorro_n:
             ahorro_gtq -= monto_origen
 
-        # ---- INVERSIONES (USD) ----
-        # Inversión entra con entrada_destino (USD), sale con monto_origen (USD)
-        if des_n in inv_cuentas_n:
-            inversiones_usd += entrada_destino
-        if rem_n in inv_cuentas_n:
-            inversiones_usd -= monto_origen
+        # ---- Inversiones (USD) ----
+        if des_n in inv_set:
+            inv_map[des] += entrada_destino
+        if rem_n in inv_set:
+            inv_map[rem] -= monto_origen
 
-    total_gtq = ahorro_gtq + (inversiones_usd * usd_to_gtq)
-    return ahorro_gtq, inversiones_usd, total_gtq
+    # asegurar cuentas inversión aunque estén en 0
+    for c in inv_cuentas:
+        cc = canon_cuenta(c, cuentas_catalogo)
+        inv_map[cc] += 0.0
 
+    inv_total_usd = sum(inv_map.values())
+    total_gtq = ahorro_gtq + (inv_total_usd * usd_to_gtq)
+
+    return ahorro_gtq, dict(inv_map), inv_total_usd, total_gtq
 
 
 
