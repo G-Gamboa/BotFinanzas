@@ -113,21 +113,63 @@ def col_clean(values):
             out.append(v)
     return out
 
+def sort_special(items: list[str], first: str | None = None, last: str | None = None) -> list[str]:
+    clean = [(x or "").strip() for x in items if (x or "").strip()]
+    # quitar duplicados manteniendo orden
+    seen = set()
+    clean2 = []
+    for x in clean:
+        k = x.lower()
+        if k not in seen:
+            seen.add(k)
+            clean2.append(x)
+
+    # separar first/last
+    first_item = None
+    last_item = None
+
+    if first:
+        for x in clean2:
+            if x.lower() == first.lower():
+                first_item = x
+                break
+        clean2 = [x for x in clean2 if x.lower() != first.lower()]
+
+    if last:
+        for x in clean2:
+            if x.lower() == last.lower():
+                last_item = x
+                break
+        clean2 = [x for x in clean2 if x.lower() != last.lower()]
+
+    clean2_sorted = sorted(clean2, key=lambda s: s.lower())
+
+    out = []
+    if first_item:
+        out.append(first_item)
+    out.extend(clean2_sorted)
+    if last_item:
+        out.append(last_item)
+    return out
+
+
 def load_catalogos(sh):
     ws = sh.worksheet(SHEET_CATEGORIAS)
 
-    fuentes_ing = col_clean(ws.col_values(1))     # A
-    categ_ing   = col_clean(ws.col_values(2))     # B
-    metodos     = col_clean(ws.col_values(3))     # C
-    bancos      = col_clean(ws.col_values(4))     # D
-    categ_egr   = col_clean(ws.col_values(5))     # E
+    fuentes_ing = col_clean(ws.col_values(1))   # A
+    categ_ing   = col_clean(ws.col_values(2))   # B
+    metodos     = col_clean(ws.col_values(3))   # C
+    bancos      = col_clean(ws.col_values(4))   # D
+    categ_egr   = col_clean(ws.col_values(5))   # E
+    cuentas     = col_clean(ws.col_values(6))   # F 
 
     return {
-        "FUENTES_ING": sort_with_priorities(fuentes_ing),
-        "CATEG_ING": sort_with_priorities(categ_ing),
-        "METODOS": sort_with_priorities(metodos),
-        "BANCOS": sort_with_priorities(bancos),
-        "CATEG_EGR": sort_with_priorities(categ_egr),
+        "FUENTES_ING": sort_special(fuentes_ing, last="Otros"),
+        "CATEG_ING":   sort_special(categ_ing,   last="Otros"),
+        "METODOS":     sort_special(metodos,     last="Otros"),
+        "BANCOS":      sort_special(bancos,      last="Otros"),
+        "CATEG_EGR":   sort_special(categ_egr,   last="Otros"),
+       "CUENTAS": [x for x in sort_special(cuentas, first="Efectivo") if x.lower() != "otros"], 
     }
 
 
@@ -392,12 +434,15 @@ def render_summary(data):
             f"Nota: {data.get('nota','')}"
         )
     elif data["tipo"] == "MOV":
+        md = data.get("monto_destino", 0)
+        md_txt = "(igual)" if not md else str(md)
         return (
             "Resumen movimiento:\n"
             f"Fecha: {data.get('fecha','')}\n"
             f"Remitente: {data.get('remitente','')}\n"
             f"Destino: {data.get('destino','')}\n"
-            f"Monto: {data.get('monto','')}\n"
+            f"Monto sale: {data.get('monto','')}\n"
+            f"Monto entra: {md_txt}\n"
             f"Nota: {data.get('nota','')}"
         )
     else:
@@ -472,7 +517,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cats = load_catalogos(sh)
     context.user_data["catalogos"] = cats
-    context.user_data["cuentas"] = build_cuentas_from_catalogos(cats)
+    context.user_data["cuentas"] = cats.get("CUENTAS") or build_cuentas_from_catalogos(cats)
+
 
     st_reset(context)
     await update.message.reply_text("¿Qué quieres registrar?", reply_markup=kb_main())
@@ -587,49 +633,78 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
 
     saldos = defaultdict(float)
 
-    # INGRESOS → sumar, excepto Inversiones
+    # =========================
+    # INGRESOS (líquidos, no inversiones)
+    # =========================
     for r in ing_rows:
         categoria = str(
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
+        metodo = str(
+            pick(r, "MÉTODO", "METODO", "Metodo", "Método") or ""
+        ).strip()
+
         if categoria == "inversiones":
-            continue  # ⬅️ no es dinero líquido
+            continue  # no entra en saldo líquido
 
-        cuenta = resolve_cuenta_from_row(r, None, "ING")
+        if not metodo:
+            continue
+
         monto = to_float(pick(r, "MONTO", "Monto"))
+        saldos[metodo] += monto
 
-        if cuenta:
-            saldos[cuenta] += monto
-
-    # EGRESOS → restar, excepto Ahorro
+    # =========================
+    # EGRESOS (no ahorro)
+    # =========================
     for r in egr_rows:
         categoria = str(
             pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
         ).strip().lower()
 
-        cuenta = resolve_cuenta_from_row(r, None, "EGR")
+        metodo = str(
+            pick(r, "MÉTODO", "METODO", "Metodo", "Método") or ""
+        ).strip()
+
+        if categoria == "ahorro":
+            continue  # se muestra en /ahorro
+
+        if not metodo:
+            continue
+
         monto = to_float(pick(r, "MONTO", "Monto"))
+        saldos[metodo] -= monto
 
-        if cuenta:
-            saldos[cuenta] -= monto
-
-    # MOVIMIENTOS → transferencias internas
+    # =========================
+    # MOVIMIENTOS (nueva lógica)
+    # =========================
     for r in mov_rows:
-        rem = str(pick(r, "REMITENTE", "Remitente") or "").strip()
-        des = str(pick(r, "DESTINO", "Destino") or "").strip()
-        monto = to_float(pick(r, "MONTO", "Monto"))
+        remitente = str(pick(r, "REMITENTE", "Remitente") or "").strip()
+        destino = str(pick(r, "DESTINO", "Destino") or "").strip()
 
-        if rem:
-            saldos[rem] -= monto
-        if des:
-            saldos[des] += monto
+        monto_origen = to_float(pick(r, "MONTO", "Monto"))
+        monto_destino = to_float(pick(r, "MONTO_DESTINO", "Monto_destino"))
 
-    # Asegurar todas las cuentas
+        if not remitente or not destino:
+            continue
+
+        # Siempre restamos lo que sale
+        saldos[remitente] -= monto_origen
+
+        # Si no hay monto_destino → misma moneda
+        if monto_destino == 0.0:
+            saldos[destino] += monto_origen
+        else:
+            saldos[destino] += monto_destino
+
+    # =========================
+    # Asegurar que existan todas las cuentas
+    # =========================
     for c in cuentas:
         saldos[c] += 0.0
 
     return saldos
+
 
 async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
@@ -709,7 +784,8 @@ async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sh = get_sheet_for_user(gc, update.effective_user.id)
         cats = load_catalogos(sh)
         context.user_data["catalogos"] = cats
-        context.user_data["cuentas"] = build_cuentas_from_catalogos(cats)
+        context.user_data["cuentas"] = cats.get("CUENTAS") or build_cuentas_from_catalogos(cats)
+
 
     cuentas = context.user_data.get("cuentas", CUENTAS)
 
@@ -800,11 +876,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data["tipo"] == "MOV":
             st["step"] = "remitente"
-            cuentas = context.user_data.get("cuentas", CUENTAS)
-            await q.edit_message_text(
-                "Remitente (de dónde sale):",
-                reply_markup=kb_list(cuentas, "FROM")
-            )
+            cats = get_catalogos(context)
+            cuentas = cats["CUENTAS"] if cats else CUENTAS
+            await q.edit_message_text("Remitente (de dónde sale):", reply_markup=kb_list(cuentas, "FROM"))
 
         return
 
@@ -852,12 +926,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cb.startswith("FROM:"):
         data["remitente"] = cb.split(":", 1)[1]
         st["step"] = "destino"
-        cuentas = context.user_data.get("cuentas", CUENTAS)
-        await q.edit_message_text(
-            "Destino (a dónde entra):",
-            reply_markup=kb_list(cuentas, "TO")
-        )
-
+        cats = get_catalogos(context)
+        cuentas = cats["CUENTAS"] if cats else CUENTAS
+        await q.edit_message_text("Destino (a dónde entra):", reply_markup=kb_list(cuentas, "TO"))
         return
 
     if cb.startswith("TO:"):
@@ -925,8 +996,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["monto"] = float(raw)
 
         if data["tipo"] == "MOV":
-            st["step"] = "nota"
-            await update.message.reply_text("Nota (o -):")
+            # ✅ NUEVO: pedir MONTO_DESTINO opcional
+            st["step"] = "monto_destino"
+            await update.message.reply_text(
+                "Monto destino (si es el mismo, escribe 0):"
+            )
         else:
             st["step"] = "metodo"
             cats = get_catalogos(context)
@@ -936,6 +1010,33 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+    if step == "monto_destino":
+        raw = txt.strip()
+
+        raw = re.sub(r"[^0-9.,\-]", "", raw)
+
+        if "." in raw and "," in raw:
+            raw = raw.replace(".", "")
+            raw = raw.replace(",", ".")
+        elif "." in raw:
+            raw = raw.replace(",", "")
+        elif "," in raw:
+            raw = raw.replace(",", ".")
+
+        try:
+            v = float(raw)
+        except:
+            v = 0.0
+
+        # regla: 0 => mismo monto
+        data["monto_destino"] = 0.0 if abs(v) < 0.000001 else v
+
+        st["step"] = "nota"
+        await update.message.reply_text("Nota (o -):")
+        return
+
+
+
     if step == "nota":
         data["nota"] = "" if txt == "-" else txt
         st["step"] = "confirm"
@@ -943,7 +1044,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             render_summary(data),
             reply_markup=kb_confirm()
         )
-
 
 # =========================
 # SAVE
@@ -973,8 +1073,10 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data, uid: int):
             data["remitente"],
             data["destino"],
             data["monto"],
+            data.get("monto_destino", 0),  
             data.get("nota", "")
         ], value_input_option="USER_ENTERED")
+
 
     else:
         ws = sh.worksheet(SHEET_EGRESOS)
