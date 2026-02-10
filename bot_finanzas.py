@@ -220,6 +220,25 @@ def get_catalogos(context: ContextTypes.DEFAULT_TYPE):
         return cats
     return None
 
+def norm_key(s: str) -> str:
+    return (s or "").strip().lower()
+
+def canon_cuenta(raw: str, cuentas_catalogo: list[str]) -> str:
+    r = (raw or "").strip()
+    if not r:
+        return ""
+
+    mapa = {norm_key(c): c for c in (cuentas_catalogo or []) if (c or "").strip()}
+    return mapa.get(norm_key(r), r)  # si no existe, deja el original
+
+def cuenta_from_ing_egr(row: dict, cuentas_catalogo: list[str]) -> str:
+    metodo = str(pick(row, "MÉTODO","METODO","Metodo","Método") or "").strip()
+    banco  = str(pick(row, "BANCO","Banco") or "").strip()
+
+    if norm_key(metodo) == "transferencia":
+        return canon_cuenta(banco, cuentas_catalogo)  # ✅ banco real
+    return canon_cuenta(metodo, cuentas_catalogo)     # ✅ método como cuenta
+
 
 def parse_fecha(value):
     if value is None:
@@ -620,6 +639,8 @@ def format_money_q(value: float) -> str:
     # Ej: 1234.5 -> Q 1,234.50
     return f"Q {value:,.2f}"
 
+from collections import defaultdict
+
 def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]:
     sh = get_sheet_for_user(gc, uid)
 
@@ -627,81 +648,54 @@ def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]
     ws_egr = sh.worksheet(SHEET_EGRESOS)
     ws_mov = sh.worksheet(SHEET_MOVIMIENTOS)
 
+    # ⚠️ performance: si crece mucho, luego optimizamos esto
     ing_rows = ws_ing.get_all_records()
     egr_rows = ws_egr.get_all_records()
     mov_rows = ws_mov.get_all_records()
 
     saldos = defaultdict(float)
 
-    # =========================
     # INGRESOS (líquidos, no inversiones)
-    # =========================
     for r in ing_rows:
-        categoria = str(
-            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
-        ).strip().lower()
-
-        metodo = str(
-            pick(r, "MÉTODO", "METODO", "Metodo", "Método") or ""
-        ).strip()
-
+        categoria = str(pick(r, "CATEGORÍA","Categoria","CATEGORIA") or "").strip().lower()
         if categoria == "inversiones":
-            continue  # no entra en saldo líquido
-
-        if not metodo:
             continue
 
-        monto = to_float(pick(r, "MONTO", "Monto"))
-        saldos[metodo] += monto
+        cuenta = cuenta_from_ing_egr(r, cuentas)
+        if not cuenta or norm_key(cuenta) == "transferencia":
+            continue
 
-    # =========================
+        saldos[cuenta] += to_float(pick(r, "MONTO","Monto"))
+
     # EGRESOS (no ahorro)
-    # =========================
     for r in egr_rows:
-        categoria = str(
-            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
-        ).strip().lower()
-
-        metodo = str(
-            pick(r, "MÉTODO", "METODO", "Metodo", "Método") or ""
-        ).strip()
-
+        categoria = str(pick(r, "CATEGORÍA","Categoria","CATEGORIA") or "").strip().lower()
         if categoria == "ahorro":
-            continue  # se muestra en /ahorro
-
-        if not metodo:
             continue
 
-        monto = to_float(pick(r, "MONTO", "Monto"))
-        saldos[metodo] -= monto
+        cuenta = cuenta_from_ing_egr(r, cuentas)
+        if not cuenta or norm_key(cuenta) == "transferencia":
+            continue
 
-    # =========================
-    # MOVIMIENTOS (nueva lógica)
-    # =========================
+        saldos[cuenta] -= to_float(pick(r, "MONTO","Monto"))
+
+    # MOVIMIENTOS (con MONTO_DESTINO)
     for r in mov_rows:
-        remitente = str(pick(r, "REMITENTE", "Remitente") or "").strip()
-        destino = str(pick(r, "DESTINO", "Destino") or "").strip()
+        rem = canon_cuenta(str(pick(r, "REMITENTE","Remitente") or ""), cuentas)
+        des = canon_cuenta(str(pick(r, "DESTINO","Destino") or ""), cuentas)
 
-        monto_origen = to_float(pick(r, "MONTO", "Monto"))
-        monto_destino = to_float(pick(r, "MONTO_DESTINO", "Monto_destino"))
-
-        if not remitente or not destino:
+        if not rem or not des:
             continue
 
-        # Siempre restamos lo que sale
-        saldos[remitente] -= monto_origen
+        monto_origen = to_float(pick(r, "MONTO_REMITENTE","MONTO","Monto"))
+        monto_destino = to_float(pick(r, "MONTO_DESTINO","Monto_destino"))
 
-        # Si no hay monto_destino → misma moneda
-        if monto_destino == 0.0:
-            saldos[destino] += monto_origen
-        else:
-            saldos[destino] += monto_destino
+        saldos[rem] -= monto_origen
+        saldos[des] += (monto_destino if abs(monto_destino) > 1e-9 else monto_origen)
 
-    # =========================
-    # Asegurar que existan todas las cuentas
-    # =========================
+    # asegurar todas las cuentas (0)
     for c in cuentas:
-        saldos[c] += 0.0
+        saldos[canon_cuenta(c, cuentas)] += 0.0
 
     return saldos
 
