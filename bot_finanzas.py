@@ -641,63 +641,185 @@ def format_money_q(value: float) -> str:
 
 from collections import defaultdict
 
-def build_saldos_dinamicos(gc, uid: int, cuentas: list[str]) -> dict[str, float]:
-    sh = get_sheet_for_user(gc, uid)
+def build_saldos_dinamicos(
+    gc,
+    uid: int,
+    cuentas: list[str],
+    *,
+    inv_cuentas: set[str] = None,
+    ahorro_cuenta: str = "Ahorro",
+) -> dict[str, float]:
+    """
+    Saldos líquidos por cuenta (GTQ):
+    - Incluye: Efectivo, Bancos, etc.
+    - Excluye: Ahorro y cuentas de inversión (Ugly/Binance/Osmo/Hapi)
+    - Ingresos/Egresos:
+        - si MÉTODO = Transferencia -> cuenta = BANCO (GTQ)
+        - si no -> cuenta = MÉTODO
+        - Excluye categoría "Inversiones" en Ingresos (porque eso va a inversiones)
+    - Movimientos:
+        - Sale del REMITENTE con MONTO
+        - Entra al DESTINO con MONTO_DESTINO si existe (>0) sino MONTO
+        - (Respeta tu convención de monedas; para saldos líquidos solo aplica
+           cuando el destino/remitente es cuenta GTQ)
+    Optimización:
+    - Evita get_all_records(); usa ws.get("A1:...") con mapeo de headers.
+    """
 
+    if inv_cuentas is None:
+        inv_cuentas = {"Ugly", "Binance", "Osmo", "Hapi"}
+
+    inv_cuentas_n = {norm_key(x) for x in inv_cuentas}
+    ahorro_cuenta_n = norm_key(ahorro_cuenta)
+
+    sh = get_sheet_for_user(gc, uid)
     ws_ing = sh.worksheet(SHEET_INGRESOS)
     ws_egr = sh.worksheet(SHEET_EGRESOS)
     ws_mov = sh.worksheet(SHEET_MOVIMIENTOS)
+    ws_cat = sh.worksheet(SHEET_CATEGORIAS)
 
-    # ⚠️ performance: si crece mucho, luego optimizamos esto
-    ing_rows = ws_ing.get_all_records()
-    egr_rows = ws_egr.get_all_records()
-    mov_rows = ws_mov.get_all_records()
+    # Catálogo oficial de CUENTAS (col F)
+    cuentas_catalogo = col_clean(ws_cat.col_values(6))
+
+    def build_header_map(values: list[list[str]]) -> dict[str, int]:
+        if not values:
+            return {}
+        header = values[0]
+        return {norm_key(h): i for i, h in enumerate(header) if (h or "").strip()}
+
+    def cell(row: list, hmap: dict[str, int], *names: str):
+        for n in names:
+            k = norm_key(n)
+            if k in hmap:
+                idx = hmap[k]
+                if idx < len(row):
+                    return row[idx]
+        return ""
+
+    def is_excluded_account(acc: str) -> bool:
+        k = norm_key(acc)
+        return (k == ahorro_cuenta_n) or (k in inv_cuentas_n)
+
+    def resolve_cuenta_ing_egr(row: list, hmap: dict[str, int]) -> str:
+        """
+        Método/Transferencia/Banco -> cuenta canónica.
+        """
+        metodo = str(cell(row, hmap, "MÉTODO", "METODO", "Metodo") or "").strip()
+        banco  = str(cell(row, hmap, "BANCO", "Banco") or "").strip()
+
+        if norm_key(metodo) == "transferencia":
+            cuenta = banco
+        else:
+            cuenta = metodo
+
+        cuenta = canon_cuenta(cuenta, cuentas_catalogo)
+        return cuenta
+
+    def mov_monto_origen(row: list, hmap: dict[str, int]) -> float:
+        return to_float(cell(row, hmap, "MONTO", "Monto"))
+
+    def mov_monto_destino(row: list, hmap: dict[str, int]) -> float:
+        md = to_float(cell(row, hmap, "MONTO_DESTINO", "Monto_destino"))
+        if abs(md) > 1e-9:
+            return md
+        return mov_monto_origen(row, hmap)
 
     saldos = defaultdict(float)
 
-    # INGRESOS (líquidos, no inversiones)
-    for r in ing_rows:
-        categoria = str(pick(r, "CATEGORÍA","Categoria","CATEGORIA") or "").strip().lower()
+    # =========================
+    # 1) INGRESOS (GTQ líquidos)
+    # =========================
+    ing_vals = ws_ing.get("A1:G")
+    ing_h = build_header_map(ing_vals)
+
+    for row in ing_vals[1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+
+        categoria = str(cell(row, ing_h, "CATEGORÍA", "CATEGORIA", "Categoria") or "").strip().lower()
         if categoria == "inversiones":
+            continue  # no entra a saldos líquidos
+
+        cuenta = resolve_cuenta_ing_egr(row, ing_h)
+        if not cuenta:
             continue
 
-        cuenta = cuenta_from_ing_egr(r, cuentas)
-        if not cuenta or norm_key(cuenta) == "transferencia":
+        # Excluir Ahorro e inversiones como cuentas dentro de /saldos
+        if is_excluded_account(cuenta):
             continue
 
-        saldos[cuenta] += to_float(pick(r, "MONTO","Monto"))
+        monto = to_float(cell(row, ing_h, "MONTO", "Monto"))
+        saldos[cuenta] += monto
 
-    # EGRESOS (no ahorro)
-    for r in egr_rows:
-        categoria = str(pick(r, "CATEGORÍA","Categoria","CATEGORIA") or "").strip().lower()
+    # =========================
+    # 2) EGRESOS (GTQ líquidos)
+    # =========================
+    egr_vals = ws_egr.get("A1:F")
+    egr_h = build_header_map(egr_vals)
+
+    for row in egr_vals[1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+
+        # Ya NO usas categoría Ahorro aquí, pero igual no estorba tener el filtro si aparece:
+        categoria = str(cell(row, egr_h, "CATEGORÍA", "CATEGORIA", "Categoria") or "").strip().lower()
         if categoria == "ahorro":
             continue
 
-        cuenta = cuenta_from_ing_egr(r, cuentas)
-        if not cuenta or norm_key(cuenta) == "transferencia":
+        cuenta = resolve_cuenta_ing_egr(row, egr_h)
+        if not cuenta:
             continue
 
-        saldos[cuenta] -= to_float(pick(r, "MONTO","Monto"))
+        if is_excluded_account(cuenta):
+            continue
 
-    # MOVIMIENTOS (con MONTO_DESTINO)
-    for r in mov_rows:
-        rem = canon_cuenta(str(pick(r, "REMITENTE","Remitente") or ""), cuentas)
-        des = canon_cuenta(str(pick(r, "DESTINO","Destino") or ""), cuentas)
+        monto = to_float(cell(row, egr_h, "MONTO", "Monto"))
+        saldos[cuenta] -= monto
 
+    # =========================
+    # 3) MOVIMIENTOS (GTQ líquidos)
+    # =========================
+    mov_vals = ws_mov.get("A1:G")
+    mov_h = build_header_map(mov_vals)
+
+    for row in mov_vals[1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+
+        rem_raw = str(cell(row, mov_h, "REMITENTE", "Remitente") or "").strip()
+        des_raw = str(cell(row, mov_h, "DESTINO", "Destino") or "").strip()
+        if not rem_raw or not des_raw:
+            continue
+
+        rem = canon_cuenta(rem_raw, cuentas_catalogo)
+        des = canon_cuenta(des_raw, cuentas_catalogo)
         if not rem or not des:
             continue
 
-        monto_origen = to_float(pick(r, "MONTO_REMITENTE","MONTO","Monto"))
-        monto_destino = to_float(pick(r, "MONTO_DESTINO","Monto_destino"))
+        # Tu convención:
+        # - salida del remitente = MONTO
+        # - entrada del destino = MONTO_DESTINO (si existe) sino MONTO
+        out_amt = mov_monto_origen(row, mov_h)
+        in_amt  = mov_monto_destino(row, mov_h)
 
-        saldos[rem] -= monto_origen
-        saldos[des] += (monto_destino if abs(monto_destino) > 1e-9 else monto_origen)
+        # Aplicar solo a cuentas líquidas (no ahorro ni inversiones)
+        if not is_excluded_account(rem):
+            saldos[rem] -= out_amt
 
-    # asegurar todas las cuentas (0)
+        if not is_excluded_account(des):
+            saldos[des] += in_amt
+
+    # =========================
+    # 4) Asegurar cuentas del catálogo (0) para que existan
+    # =========================
     for c in cuentas:
-        saldos[canon_cuenta(c, cuentas)] += 0.0
+        cc = canon_cuenta(c, cuentas_catalogo)
+        if not cc or is_excluded_account(cc):
+            continue
+        saldos[cc] += 0.0
 
-    return saldos
+    return dict(saldos)
+
 
 
 async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -725,45 +847,117 @@ async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"No pude calcular ahorro. Error: {e}")
 
 
-def build_ahorro_inversiones(gc, uid: int) -> tuple[float, float, float]:
+def build_ahorro_inversiones(
+    gc,
+    uid: int,
+    usd_to_gtq: float = None,
+    inv_cuentas: set[str] = None,
+    ahorro_cuenta: str = "Ahorro",
+) -> tuple[float, float, float]:
     """
-    Retorna:
-    - ahorro_gtq
-    - inversiones_usd
-    - total_gtq (ahorro + inversiones convertidas)
+    Saldo actual:
+    - ahorro_gtq: SOLO desde MOVIMIENTOS (GTQ)
+    - inversiones_usd: INGRESOS categoría "Inversiones" (USD) + MOVIMIENTOS (USD)
+    - total_gtq = ahorro_gtq + inversiones_usd * usd_to_gtq
+
+    Convención de Movimientos:
+    - Salida del remitente: MONTO
+    - Entrada al destino: MONTO_DESTINO (si existe y >0), si no MONTO
+    - Si remitente es inversión -> MONTO está en USD
+    - Si destino es inversión -> MONTO_DESTINO está en USD
+    - Si destino es GTQ -> MONTO_DESTINO está en GTQ
     """
+
+    if usd_to_gtq is None:
+        usd_to_gtq = USD_TO_GTQ
+
+    if inv_cuentas is None:
+        inv_cuentas = {"Ugly", "Binance", "Osmo", "Hapi"}
+
+    inv_cuentas_n = {norm_key(x) for x in inv_cuentas}
+    ahorro_cuenta_n = norm_key(ahorro_cuenta)
+
     sh = get_sheet_for_user(gc, uid)
-
     ws_ing = sh.worksheet(SHEET_INGRESOS)
-    ws_egr = sh.worksheet(SHEET_EGRESOS)
+    ws_mov = sh.worksheet(SHEET_MOVIMIENTOS)
+    ws_cat = sh.worksheet(SHEET_CATEGORIAS)
 
-    ing_rows = ws_ing.get_all_records()
-    egr_rows = ws_egr.get_all_records()
+    # Catálogo canónico de cuentas (col F)
+    cuentas_catalogo = col_clean(ws_cat.col_values(6))
+
+    def build_header_map(values: list[list[str]]) -> dict[str, int]:
+        if not values:
+            return {}
+        header = values[0]
+        return {norm_key(h): i for i, h in enumerate(header) if (h or "").strip()}
+
+    def cell(row: list, hmap: dict[str, int], *names: str):
+        for n in names:
+            k = norm_key(n)
+            if k in hmap:
+                idx = hmap[k]
+                if idx < len(row):
+                    return row[idx]
+        return ""
 
     ahorro_gtq = 0.0
     inversiones_usd = 0.0
 
-    # Ahorro → EGRESOS (GTQ)
-    for r in egr_rows:
-        categoria = str(
-            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
-        ).strip().lower()
+    # =========================
+    # 1) Inversiones base desde INGRESOS (USD)
+    # =========================
+    ing_vals = ws_ing.get("A1:G")
+    ing_h = build_header_map(ing_vals)
 
-        if categoria == "ahorro":
-            ahorro_gtq += to_float(pick(r, "MONTO", "Monto"))
-
-    # Inversiones → INGRESOS (USD)
-    for r in ing_rows:
-        categoria = str(
-            pick(r, "CATEGORÍA", "Categoria", "CATEGORIA") or ""
-        ).strip().lower()
-
+    for row in ing_vals[1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+        categoria = str(cell(row, ing_h, "CATEGORÍA", "CATEGORIA", "Categoria") or "").strip().lower()
         if categoria == "inversiones":
-            inversiones_usd += to_float(pick(r, "MONTO", "Monto"))
+            inversiones_usd += to_float(cell(row, ing_h, "MONTO", "Monto"))
 
-    total_gtq = ahorro_gtq + (inversiones_usd * USD_TO_GTQ)
+    # =========================
+    # 2) Movimientos: saldo actual
+    # =========================
+    mov_vals = ws_mov.get("A1:G")  # por si existe MONTO_DESTINO
+    mov_h = build_header_map(mov_vals)
 
+    for row in mov_vals[1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+
+        rem_raw = str(cell(row, mov_h, "REMITENTE", "Remitente") or "").strip()
+        des_raw = str(cell(row, mov_h, "DESTINO", "Destino") or "").strip()
+        if not rem_raw or not des_raw:
+            continue
+
+        rem = canon_cuenta(rem_raw, cuentas_catalogo)
+        des = canon_cuenta(des_raw, cuentas_catalogo)
+        rem_n = norm_key(rem)
+        des_n = norm_key(des)
+
+        monto_origen = to_float(cell(row, mov_h, "MONTO", "Monto"))  # salida del remitente
+        monto_destino = to_float(cell(row, mov_h, "MONTO_DESTINO", "Monto_destino"))  # entrada al destino
+
+        entrada_destino = monto_destino if abs(monto_destino) > 1e-9 else monto_origen
+
+        # ---- AHORRO (GTQ) ----
+        # Ahorro es cuenta GTQ: entra con entrada_destino (GTQ), sale con monto_origen (GTQ)
+        if des_n == ahorro_cuenta_n:
+            ahorro_gtq += entrada_destino
+        if rem_n == ahorro_cuenta_n:
+            ahorro_gtq -= monto_origen
+
+        # ---- INVERSIONES (USD) ----
+        # Inversión entra con entrada_destino (USD), sale con monto_origen (USD)
+        if des_n in inv_cuentas_n:
+            inversiones_usd += entrada_destino
+        if rem_n in inv_cuentas_n:
+            inversiones_usd -= monto_origen
+
+    total_gtq = ahorro_gtq + (inversiones_usd * usd_to_gtq)
     return ahorro_gtq, inversiones_usd, total_gtq
+
 
 
 
