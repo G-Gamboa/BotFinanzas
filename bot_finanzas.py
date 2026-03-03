@@ -848,9 +848,6 @@ async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-
-from collections import defaultdict
-
 def build_ahorro_inversiones(
     gc,
     uid: int,
@@ -859,18 +856,16 @@ def build_ahorro_inversiones(
     ahorro_cuenta: str = "Ahorro",
 ) -> tuple[float, dict[str, float], float, float]:
     """
-    Saldo actual:
-    - ahorro_gtq: SOLO desde MOVIMIENTOS (GTQ)
-    - inv_map_usd: saldo USD por cuenta de inversión (Ugly/Binance/Osmo/Hapi)
-      (desde INGRESOS + MOVIMIENTOS)
+    Retorna:
+    - ahorro_gtq (desde MOVIMIENTOS)
+    - inv_map_usd (saldo USD por cuenta de inversión)
     - inv_total_usd
     - total_gtq = ahorro_gtq + inv_total_usd * usd_to_gtq
 
-    Convención MOVIMIENTOS:
-    - salida remitente = MONTO
-    - entrada destino  = MONTO_DESTINO si >0, si no MONTO
-    - Si remitente es inversión y destino GTQ -> MONTO es USD, MONTO_DESTINO es GTQ
-    - Si remitente GTQ y destino inversión -> MONTO es GTQ, MONTO_DESTINO es USD
+    Inversiones se calculan desde:
+    - INGRESOS (Categoría = Inversiones, asignada por MÉTODO)
+    - MOVIMIENTOS (entradas/salidas a cuentas inversión; MONTO_DESTINO si aplica)
+    - EGRESOS (si MÉTODO es una cuenta de inversión; asumimos MONTO en USD)
     """
 
     if usd_to_gtq is None:
@@ -884,10 +879,10 @@ def build_ahorro_inversiones(
 
     sh = get_sheet_for_user(gc, uid)
     ws_ing = sh.worksheet(SHEET_INGRESOS)
+    ws_egr = sh.worksheet(SHEET_EGRESOS)
     ws_mov = sh.worksheet(SHEET_MOVIMIENTOS)
     ws_cat = sh.worksheet(SHEET_CATEGORIAS)
 
-    # Catálogo canónico de cuentas (col F)
     cuentas_catalogo = col_clean(ws_cat.col_values(6))
 
     def build_header_map(values: list[list[str]]) -> dict[str, int]:
@@ -906,10 +901,10 @@ def build_ahorro_inversiones(
         return ""
 
     ahorro_gtq = 0.0
-    inv_map = defaultdict(float)  # USD por cuenta
+    inv_map = defaultdict(float)  # USD
 
     # =========================
-    # 1) INGRESOS: inversiones por método (USD)
+    # 1) INGRESOS: Inversiones (USD) por MÉTODO
     # =========================
     ing_vals = ws_ing.get("A1:G")
     ing_h = build_header_map(ing_vals)
@@ -925,14 +920,13 @@ def build_ahorro_inversiones(
         metodo = str(cell(row, ing_h, "MÉTODO", "METODO", "Metodo") or "").strip()
         cuenta_inv = canon_cuenta(metodo, cuentas_catalogo)
         if norm_key(cuenta_inv) not in inv_set:
-            # si alguien puso "Transferencia" u otro método por error, lo ignoramos
             continue
 
         monto = to_float(cell(row, ing_h, "MONTO", "Monto"))
         inv_map[cuenta_inv] += monto
 
     # =========================
-    # 2) MOVIMIENTOS: saldo actual (Ahorro GTQ + Inversiones USD)
+    # 2) MOVIMIENTOS: Ahorro (GTQ) + Inversiones (USD)
     # =========================
     mov_vals = ws_mov.get("A1:G")
     mov_h = build_header_map(mov_vals)
@@ -951,21 +945,45 @@ def build_ahorro_inversiones(
         rem_n = norm_key(rem)
         des_n = norm_key(des)
 
-        monto_origen = to_float(cell(row, mov_h, "MONTO", "Monto"))  # sale del remitente
-        monto_destino = to_float(cell(row, mov_h, "MONTO_DESTINO", "Monto_destino"))  # entra al destino
+        monto_origen = to_float(cell(row, mov_h, "MONTO", "Monto"))
+        monto_destino = to_float(cell(row, mov_h, "MONTO_DESTINO", "Monto_destino"))
         entrada_destino = monto_destino if abs(monto_destino) > 1e-9 else monto_origen
 
-        # ---- Ahorro (GTQ) ----
+        # Ahorro GTQ (solo movimientos)
         if des_n == ahorro_n:
             ahorro_gtq += entrada_destino
         if rem_n == ahorro_n:
             ahorro_gtq -= monto_origen
 
-        # ---- Inversiones (USD) ----
+        # Inversiones USD
         if des_n in inv_set:
             inv_map[des] += entrada_destino
         if rem_n in inv_set:
             inv_map[rem] -= monto_origen
+
+    # =========================
+    # 3) EGRESOS desde inversión (USD)
+    # =========================
+    egr_vals = ws_egr.get("A1:F")
+    egr_h = build_header_map(egr_vals)
+
+    for row in egr_vals[1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+
+        metodo = str(cell(row, egr_h, "MÉTODO", "METODO", "Metodo") or "").strip()
+        banco  = str(cell(row, egr_h, "BANCO", "Banco") or "").strip()
+        monto  = to_float(cell(row, egr_h, "MONTO", "Monto"))
+
+        # Determinar "cuenta origen" del egreso
+        if norm_key(metodo) == "transferencia":
+            cuenta_origen = canon_cuenta(banco, cuentas_catalogo)
+        else:
+            cuenta_origen = canon_cuenta(metodo, cuentas_catalogo)
+
+        if norm_key(cuenta_origen) in inv_set:
+            # asumimos MONTO en USD
+            inv_map[cuenta_origen] -= monto
 
     # asegurar cuentas inversión aunque estén en 0
     for c in inv_cuentas:
