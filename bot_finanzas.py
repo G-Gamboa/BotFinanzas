@@ -310,7 +310,7 @@ def kb_mov_type():
         ],
         [
             InlineKeyboardButton("Inversión", callback_data="MVT:INVERSION"),
-            InlineKeyboardButton("Préstamo", callback_data="MVT:PRESTAMO"),
+            InlineKeyboardButton("Préstamos", callback_data="MVT:PRESTAMO"),
         ],
         [InlineKeyboardButton("Cancelar", callback_data="CANCEL")],
     ])
@@ -327,7 +327,7 @@ def kb_mov_direction(movtype: str):
             [InlineKeyboardButton("Invertir", callback_data="MDIR:INVERTIR")],
             [InlineKeyboardButton("Retirar", callback_data="MDIR:RETIRAR_INV")],
         ]
-    elif movtype == "prestamo":
+    elif movtype == "prestamos":
         opts = [
             [InlineKeyboardButton("Dar", callback_data="MDIR:DAR")],
             [InlineKeyboardButton("Cobrar", callback_data="MDIR:COBRAR")],
