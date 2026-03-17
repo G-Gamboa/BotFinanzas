@@ -310,7 +310,7 @@ def kb_mov_type():
         ],
         [
             InlineKeyboardButton("Inversión", callback_data="MVT:INVERSION"),
-            InlineKeyboardButton("Préstamos", callback_data="MVT:PRESTAMOS"),
+            InlineKeyboardButton("Préstamo", callback_data="MVT:PRESTAMO"),
         ],
         [InlineKeyboardButton("Cancelar", callback_data="CANCEL")],
     ])
@@ -327,7 +327,7 @@ def kb_mov_direction(movtype: str):
             [InlineKeyboardButton("Invertir", callback_data="MDIR:INVERTIR")],
             [InlineKeyboardButton("Retirar", callback_data="MDIR:RETIRAR_INV")],
         ]
-    elif movtype == "prestamos":
+    elif movtype == "prestamo":
         opts = [
             [InlineKeyboardButton("Dar", callback_data="MDIR:DAR")],
             [InlineKeyboardButton("Cobrar", callback_data="MDIR:COBRAR")],
@@ -1066,7 +1066,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if direction == "DAR":
                 data["bolsa_remitente"] = BOLSA_NORMAL
                 data["remitente"] = account
-                data["bolsa_destino"] = "Prestamo"
+                data["bolsa_destino"] = "Prestamos"
                 data["destino"] = account
             else:
                 liquid, _, _ = get_accounts_by_role(context)
@@ -1080,7 +1080,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if cb.startswith("COLLACC:"):
         account = cb.split(":", 1)[1]
-        data["bolsa_remitente"] = "Prestamo"
+        data["bolsa_remitente"] = "Prestamos"
         data["remitente"] = account
         data["bolsa_destino"] = BOLSA_NORMAL
         data["destino"] = account
