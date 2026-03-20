@@ -30,6 +30,7 @@ SHEET_EGRESOS = "Egresos"
 SHEET_MOVIMIENTOS = "Movimientos"
 SHEET_RESUMEN = "Resumen"
 SHEET_CATEGORIAS = "Categorías"
+SHEET_DEUDAS = "Deudas"
 
 USD_TO_GTQ = 7.7
 TZ = ZoneInfo("America/Guatemala")
@@ -336,6 +337,20 @@ def kb_mov_direction(movtype: str):
         opts = []
     opts.append([InlineKeyboardButton("Cancelar", callback_data="CANCEL")])
     return InlineKeyboardMarkup(opts)
+
+
+def kb_deudas_activas(items: list[dict]):
+    rows = []
+    for d in items:
+        rows.append([InlineKeyboardButton(
+            f"{d['nombre']} | {format_money_q(d['cuota'])}",
+            callback_data=f"DEUDA:{d['row']}"
+        )])
+    rows.append([InlineKeyboardButton("Cancelar", callback_data="CANCEL")])
+    return InlineKeyboardMarkup(rows)
+
+def kb_cuentas_pago(cuentas: list[str]):
+    return kb_list(cuentas, "PAGAR_CTA")
 
 # =========================
 # STATE
@@ -725,6 +740,100 @@ def render_q_breakdown(title: str, data: dict[str, float], show_zeros: bool = Fa
             lines.append(f"  - {k}: {format_money_q(v)}")
     return "\n".join(lines)
 
+def build_header_map(values: list[list[str]]) -> dict[str, int]:
+    if not values:
+        return {}
+    header = values[0]
+    return {norm_key(h): i for i, h in enumerate(header) if (h or "").strip()}
+
+def row_cell(row: list, hmap: dict[str, int], *names: str):
+    for n in names:
+        k = norm_key(n)
+        if k in hmap:
+            idx = hmap[k]
+            if idx < len(row):
+                return row[idx]
+    return ""
+
+def build_deudas(gc, uid: int) -> list[dict]:
+    sh = get_sheet_for_user(gc, uid)
+    ws = sh.worksheet(SHEET_DEUDAS)
+
+    vals = ws.get("A1:I")
+    hmap = build_header_map(vals)
+
+    deudas = []
+
+    for sheet_row_num, row in enumerate(vals[1:], start=2):
+        if not any((c or "").strip() for c in row):
+            continue
+
+        nombre = str(row_cell(row, hmap, "NOMBRE") or "").strip()
+        acreedor = str(row_cell(row, hmap, "A QUIÉN LE DEBO", "A QUIEN LE DEBO") or "").strip()
+        fecha_pago = str(row_cell(row, hmap, "FECHA DE PAGO") or "").strip()
+        cuota = to_float(row_cell(row, hmap, "CUOTA"))
+        meses = int(to_float(row_cell(row, hmap, "MESES")))
+        pagados = int(to_float(row_cell(row, hmap, "PAGADOS")))
+        pendientes = int(to_float(row_cell(row, hmap, "PENDIENTES")))
+        saldo = to_float(row_cell(row, hmap, "SALDO"))
+        estado = str(row_cell(row, hmap, "ESTADO") or "").strip()
+
+        # fallback por si la hoja aún no tiene fórmulas bien puestas
+        if pendientes <= 0 and meses > pagados:
+            pendientes = max(meses - pagados, 0)
+        if saldo <= 0 and cuota > 0 and pendientes > 0:
+            saldo = cuota * pendientes
+        if not estado:
+            estado = "Pagada" if pendientes <= 0 else "Activa"
+
+        deudas.append({
+            "row": sheet_row_num,
+            "nombre": nombre,
+            "acreedor": acreedor,
+            "fecha_pago": fecha_pago,
+            "cuota": cuota,
+            "meses": meses,
+            "pagados": pagados,
+            "pendientes": pendientes,
+            "saldo": saldo,
+            "estado": estado,
+        })
+
+    return deudas
+
+def build_total_deudas(gc, uid: int) -> float:
+    deudas = build_deudas(gc, uid)
+    return sum(d["saldo"] for d in deudas if d["estado"].lower() == "activa")
+
+
+async def pagar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    try:
+        items = build_deudas(gc, update.effective_user.id)
+        activas = [d for d in items if d["estado"].lower() == "activa" and d["pendientes"] > 0]
+
+        if not activas:
+            await update.message.reply_text("No tienes deudas activas para pagar.")
+            return
+
+        st_reset(context)
+        st = st_get(context)
+        st["step"] = "pagar_deuda_select"
+        context.user_data["deudas_activas"] = activas
+
+        await update.message.reply_text(
+            "Selecciona la deuda que vas a pagar:",
+            reply_markup=kb_deudas_activas(activas)
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude iniciar el pago de deuda. Error: {e}")
+
+
 # =========================
 # COMMANDS
 # =========================
@@ -758,45 +867,6 @@ async def resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(txt)
     except Exception as e:
         await update.message.reply_text(f"No pude generar el resumen. Error: {e}")
-
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not allowed(update):
-        return
-    gc = context.application.bot_data["gc"]
-    try:
-        sh = get_sheet_for_user(gc, update.effective_user.id)
-        ws = sh.worksheet(SHEET_RESUMEN)
-
-        cuentas = ws.col_values(1)
-        saldos = ws.col_values(4)
-        n = min(len(cuentas), len(saldos))
-        pares = []
-        for i in range(n):
-            cta = (cuentas[i] or "").strip()
-            sal = (saldos[i] or "").strip()
-            if not cta and not sal:
-                continue
-            if i == 0 and cta.lower() in ("cuenta", "cuentas") and sal.lower() in ("saldo", "saldos"):
-                continue
-            if cta:
-                pares.append((cta, sal))
-
-        if not pares:
-            await update.message.reply_text("No encontré datos en Resumen (col A y D).")
-            return
-
-        w_cta = max(len("Cuenta"), max(len(c) for c, _ in pares))
-        w_sal = max(len("Saldo"), max(len(s) for _, s in pares))
-        top = f"┌{'─'*(w_cta+2)}┬{'─'*(w_sal+2)}┐"
-        hdr = f"│ {'Cuenta'.ljust(w_cta)} │ {'Saldo'.ljust(w_sal)} │"
-        mid = f"├{'─'*(w_cta+2)}┼{'─'*(w_sal+2)}┤"
-        rows = [f"│ {c.ljust(w_cta)} │ {s.ljust(w_sal)} │" for c, s in pares]
-        bot = f"└{'─'*(w_cta+2)}┴{'─'*(w_sal+2)}┘"
-        table = "\n".join([top, hdr, mid, *rows, bot])
-
-        await update.message.reply_text(f"<b>Balance</b>\n<pre>{table}</pre>", parse_mode="HTML")
-    except Exception as e:
-        await update.message.reply_text(f"No pude leer la hoja 'Resumen'. Error: {e}")
 
 async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
@@ -854,6 +924,131 @@ async def networth(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ahorro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await networth(update, context)
+
+async def deudas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    try:
+        items = build_deudas(gc, update.effective_user.id)
+
+        if not items:
+            await update.message.reply_text("No encontré deudas en la hoja Deudas.")
+            return
+
+        bloques = []
+        for d in items:
+            bloques.append(
+                f"{d['nombre']}\n"
+                f"- A quién le debo: {d['acreedor']}\n"
+                f"- Fecha de pago: {d['fecha_pago']}\n"
+                f"- Cuota: {format_money_q(d['cuota'])}\n"
+                f"- Pagados: {d['pagados']} / {d['meses']}\n"
+                f"- Pendientes: {d['pendientes']}\n"
+                f"- Saldo: {format_money_q(d['saldo'])}\n"
+                f"- Estado: {d['estado']}"
+            )
+
+        await update.message.reply_text("Deudas\n\n" + "\n\n".join(bloques))
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude leer deudas. Error: {e}")
+
+
+async def deudas_activas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    try:
+        items = build_deudas(gc, update.effective_user.id)
+        activas = [d for d in items if d["estado"].lower() == "activa" and d["pendientes"] > 0]
+
+        if not activas:
+            await update.message.reply_text("No tienes deudas activas.")
+            return
+
+        txt = "Deudas activas\n\n" + "\n".join(
+            f"- {d['nombre']} | Vence: {d['fecha_pago']} | Pendientes: {d['pendientes']} | Saldo: {format_money_q(d['saldo'])}"
+            for d in activas
+        )
+
+        await update.message.reply_text(txt)
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude leer deudas activas. Error: {e}")
+
+
+async def neto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+
+    gc = context.application.bot_data["gc"]
+
+    try:
+        # AJUSTA esta línea al nombre real de tu función de patrimonio bruto
+        ahorro_gtq, prestamos_gtq, inv_map, inv_total_usd, bruto_gtq = build_networth(
+            gc, update.effective_user.id
+        )
+
+        pasivos_gtq = build_total_deudas(gc, update.effective_user.id)
+        neto_gtq = bruto_gtq - pasivos_gtq
+
+        msg = (
+            "Patrimonio Neto\n\n"
+            f"Patrimonio bruto: {format_money_q(bruto_gtq)}\n"
+            f"Pasivos (deudas): {format_money_q(pasivos_gtq)}\n\n"
+            f"Patrimonio neto: {format_money_q(neto_gtq)}"
+        )
+
+        await update.message.reply_text(msg)
+
+    except Exception as e:
+        await update.message.reply_text(f"No pude calcular patrimonio neto. Error: {e}")
+
+
+def sumar_un_pago_deuda(sh, row_num: int):
+    ws = sh.worksheet(SHEET_DEUDAS)
+
+    # Columna F = PAGADOS
+    pagados_actual = int(to_float(ws.cell(row_num, 6).value))
+    ws.update_cell(row_num, 6, pagados_actual + 1)
+
+def registrar_egreso_deuda(sh, fecha: str, cuenta_pago: str, monto: float, nombre_deuda: str):
+    ws = sh.worksheet(SHEET_EGRESOS)
+
+    if norm_key(cuenta_pago) in {"bi", "banrural", "nexa", "zigi", "gyt"}:
+        metodo = "Transferencia"
+        banco = cuenta_pago
+    else:
+        metodo = cuenta_pago
+        banco = ""
+
+    ws.append_row([
+        fecha,
+        "Deuda",
+        monto,
+        metodo,
+        banco,
+        f"Pago de deuda: {nombre_deuda}"
+    ], value_input_option="USER_ENTERED")
+
+async def ejecutar_pago_deuda(context: ContextTypes.DEFAULT_TYPE, uid: int, data: dict):
+    gc = context.application.bot_data["gc"]
+    sh = get_sheet_for_user(gc, uid)
+
+    fecha = datetime.now(TZ).strftime("%Y-%m-%d")
+    row_num = data["deuda_row"]
+    nombre_deuda = data["deuda_nombre"]
+    cuota = float(data["deuda_cuota"])
+    cuenta_pago = data["cuenta_pago"]
+
+    sumar_un_pago_deuda(sh, row_num)
+    registrar_egreso_deuda(sh, fecha, cuenta_pago, cuota, nombre_deuda)
+
 
 # =========================
 # CALLBACKS
@@ -1087,6 +1282,56 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         st["step"] = "monto"
         await q.edit_message_text("Monto:")
         return
+    
+
+    if cb.startswith("DEUDA:"):
+        row_num = int(cb.split(":")[1])
+
+        activas = context.user_data.get("deudas_activas", [])
+        deuda = next((d for d in activas if d["row"] == row_num), None)
+
+        if not deuda:
+            await q.edit_message_text("No encontré esa deuda.")
+            return
+
+        st["data"]["deuda_row"] = deuda["row"]
+        st["data"]["deuda_nombre"] = deuda["nombre"]
+        st["data"]["deuda_cuota"] = deuda["cuota"]
+
+        cats = get_catalogos(context)
+        cuentas = cats["CUENTAS"] if cats else CUENTAS
+
+        # aquí filtramos cuentas patrimoniales e inversión, porque pagar deuda sale de liquidez
+        excluir = {"ahorro", "prestamos", "ugly", "binance", "osmo", "hapi"}
+        cuentas_pago = [c for c in cuentas if c.strip().lower() not in excluir]
+
+        st["step"] = "pagar_deuda_cuenta"
+        await q.edit_message_text(
+            f"¿Con qué cuenta pagarás {deuda['nombre']} por {format_money_q(deuda['cuota'])}?",
+            reply_markup=kb_cuentas_pago(cuentas_pago)
+        )
+        return
+
+    if cb.startswith("PAGAR_CTA:"):
+        cuenta_pago = cb.split(":", 1)[1]
+
+        st["data"]["cuenta_pago"] = cuenta_pago
+
+        # ejecutar pago
+        await ejecutar_pago_deuda(context, update.effective_user.id, st["data"])
+
+        deuda_nombre = st["data"]["deuda_nombre"]
+        cuota = st["data"]["deuda_cuota"]
+
+        st_reset(context)
+        await q.edit_message_text(
+            f"Pago registrado.\n\n"
+            f"Deuda: {deuda_nombre}\n"
+            f"Cuenta: {cuenta_pago}\n"
+            f"Monto: {format_money_q(cuota)}"
+        )
+        return
+
 
     if cb == "CONFIRM:SAVE":
         await save_to_sheets(context, data, update.effective_user.id)
@@ -1215,10 +1460,13 @@ def main():
     app.add_handler(CommandHandler("cancelar", cancelar))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("resumen", resumen))
-    app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("saldos", saldos))
     app.add_handler(CommandHandler("ahorro", ahorro))
     app.add_handler(CommandHandler("networth", networth))
+    app.add_handler(CommandHandler("deudas", deudas))
+    app.add_handler(CommandHandler("deudas_activas", deudas_activas))
+    app.add_handler(CommandHandler("pagar", pagar))
+    app.add_handler(CommandHandler("neto", neto))
 
     app.add_handler(CallbackQueryHandler(on_cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
