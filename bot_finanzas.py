@@ -903,22 +903,44 @@ async def saldos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"No pude calcular saldos. Error: {e}")
 
+def render_lines_q(data: dict[str, float]) -> str:
+    items = [(k, v) for k, v in data.items() if abs(v) > 1e-9]
+    if not items:
+        return "  - (sin datos)"
+    return "\n".join([f"  - {k}: {format_money_q(v)}" for k, v in items])
+
+def render_lines_usd(data: dict[str, float]) -> str:
+    items = [(k, v) for k, v in data.items() if abs(v) > 1e-9]
+    if not items:
+        return "  - (sin datos)"
+    return "\n".join([f"  - {k}: ${v:,.2f}" for k, v in items])
+
 async def networth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not allowed(update):
         return
+
     gc = context.application.bot_data["gc"]
+
     try:
-        info = build_networth(gc, update.effective_user.id)
-        txt = (
-            "<b>Net Worth</b>\n\n"
-            f"{render_q_breakdown('Liquidez', info['liquid_map'])}\n\n"
-            f"{render_q_breakdown('Ahorro', info['ahorro_map'])}\n\n"
-            f"{render_q_breakdown('Préstamos', info['prestamos_map'])}\n\n"
-            f"Inversiones\n{render_inversiones(info['inv_map'])}\n\n"
-            f"<b>Total patrimonial (GTQ):</b> {format_money_q(info['total_gtq'])}\n"
-            f"<i>TC usado: {info['tc']}</i>"
+        nw = build_networth(gc, update.effective_user.id)
+
+        msg = (
+            "Net Worth\n\n"
+            "Liquidez\n"
+            f"{render_lines_q(nw['liquid_map'])}\n"
+            f"- Total líquido: {format_money_q(nw['liquidez_gtq'])}\n\n"
+            "Ahorro\n"
+            f"{render_lines_q(nw['ahorro_map'])}\n\n"
+            "Préstamos\n"
+            f"{render_lines_q(nw['prestamos_map'])}\n\n"
+            "Inversiones\n"
+            f"{render_lines_usd(nw['inv_map'])}\n\n"
+            f"Total patrimonial (GTQ): {format_money_q(nw['total_gtq'])}\n"
+            f"TC usado: {nw['tc']}"
         )
-        await update.message.reply_text(txt, parse_mode="HTML")
+
+        await update.message.reply_text(msg)
+
     except Exception as e:
         await update.message.reply_text(f"No pude calcular net worth. Error: {e}")
 
@@ -989,17 +1011,13 @@ async def neto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gc = context.application.bot_data["gc"]
 
     try:
-        # AJUSTA esta línea al nombre real de tu función de patrimonio bruto
-        ahorro_gtq, prestamos_gtq, inv_map, inv_total_usd, bruto_gtq = build_networth(
-            gc, update.effective_user.id
-        )
-
+        nw = build_networth(gc, update.effective_user.id)
         pasivos_gtq = build_total_deudas(gc, update.effective_user.id)
-        neto_gtq = bruto_gtq - pasivos_gtq
+        neto_gtq = nw["total_gtq"] - pasivos_gtq
 
         msg = (
             "Patrimonio Neto\n\n"
-            f"Patrimonio bruto: {format_money_q(bruto_gtq)}\n"
+            f"Patrimonio bruto: {format_money_q(nw['total_gtq'])}\n"
             f"Pasivos (deudas): {format_money_q(pasivos_gtq)}\n\n"
             f"Patrimonio neto: {format_money_q(neto_gtq)}"
         )
@@ -1008,7 +1026,6 @@ async def neto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await update.message.reply_text(f"No pude calcular patrimonio neto. Error: {e}")
-
 
 def sumar_un_pago_deuda(sh, row_num: int):
     ws = sh.worksheet(SHEET_DEUDAS)
