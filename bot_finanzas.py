@@ -117,6 +117,24 @@ def parse_fecha(value):
             pass
     return None
 
+def ensure_fecha_text(value: str) -> str:
+    f = parse_fecha(value)
+    if not f:
+        raise ValueError("Fecha inválida. Usa YYYY-MM-DD.")
+    return f.strftime("%Y-%m-%d")
+
+def is_positive_amount(value) -> bool:
+    try:
+        return float(value) > 0
+    except Exception:
+        return False
+
+def parse_positive_int_text(txt: str) -> int:
+    val = int(float(txt.strip()))
+    if val < 0:
+        raise ValueError("Debe ser un número entero igual o mayor a 0.")
+    return val
+
 def month_range(today: date):
     start = today.replace(day=1)
     if start.month == 12:
@@ -491,6 +509,19 @@ async def job_resumen_fin_de_mes(context: ContextTypes.DEFAULT_TYPE):
 # RENDER SUMMARY
 # =========================
 def render_summary(data):
+    if data["tipo"] == "DEUDA":
+        return (
+            "Resumen nueva deuda:\n"
+            f"Nombre: {data.get('deuda_nombre','')}\n"
+            f"A quién le debo: {data.get('deuda_acreedor','')}\n"
+            f"Fecha de pago: {data.get('deuda_fecha_pago','')}\n"
+            f"Cuota: {format_money_q(float(data.get('deuda_cuota', 0) or 0))}\n"
+            f"Meses: {data.get('deuda_meses', 0)}\n"
+            f"Pagados: {data.get('deuda_pagados', 0)}\n"
+            f"Pendientes: {data.get('deuda_pendientes', 0)}\n"
+            f"Saldo: {format_money_q(float(data.get('deuda_saldo', 0) or 0))}\n"
+            f"Estado: {data.get('deuda_estado','')}"
+        )
     if data["tipo"] == "ING":
         return (
             "Resumen:\n"
@@ -528,6 +559,58 @@ def render_summary(data):
             f"Banco: {data.get('banco','')}\n"
             f"Nota: {data.get('nota','')}"
         )
+
+# =========================
+# VALIDACIONES
+# =========================
+def movimientos_misma_ruta(data: dict) -> bool:
+    return (
+        norm_key(data.get("bolsa_remitente", BOLSA_NORMAL)) == norm_key(data.get("bolsa_destino", BOLSA_NORMAL))
+        and norm_key(data.get("remitente", "")) == norm_key(data.get("destino", ""))
+        and bool((data.get("remitente", "") or "").strip())
+    )
+
+def validate_flow_data(data: dict):
+    tipo = data.get("tipo")
+
+    if tipo in {"ING", "EGR", "MOV"}:
+        data["fecha"] = ensure_fecha_text(data.get("fecha", ""))
+
+    if tipo == "ING":
+        if not is_positive_amount(data.get("monto")):
+            raise ValueError("El monto debe ser mayor a 0.")
+    elif tipo == "EGR":
+        if not is_positive_amount(data.get("monto")):
+            raise ValueError("El monto debe ser mayor a 0.")
+    elif tipo == "MOV":
+        if not is_positive_amount(data.get("monto")):
+            raise ValueError("El monto debe ser mayor a 0.")
+        monto_dest = data.get("monto_destino", 0)
+        if monto_dest not in (None, "") and float(monto_dest) < 0:
+            raise ValueError("El monto destino no puede ser negativo.")
+        if movimientos_misma_ruta(data):
+            raise ValueError("Remitente y destino no pueden ser iguales.")
+        if norm_key(data.get("mov_type", "")) == "prestamo" and not (data.get("persona_prestamo", "") or "").strip():
+            raise ValueError("El préstamo debe tener una persona asociada.")
+    elif tipo == "DEUDA":
+        data["deuda_fecha_pago"] = ensure_fecha_text(data.get("deuda_fecha_pago", ""))
+        if not (data.get("deuda_nombre", "") or "").strip():
+            raise ValueError("La deuda debe tener nombre.")
+        if not (data.get("deuda_acreedor", "") or "").strip():
+            raise ValueError("Debes indicar a quién le debes.")
+        if not is_positive_amount(data.get("deuda_cuota")):
+            raise ValueError("La cuota debe ser mayor a 0.")
+        meses = int(data.get("deuda_meses", 0))
+        pagados = int(data.get("deuda_pagados", 0))
+        if meses <= 0:
+            raise ValueError("Los meses deben ser mayores a 0.")
+        if pagados < 0:
+            raise ValueError("Pagados no puede ser negativo.")
+        if pagados > meses:
+            raise ValueError("Pagados no puede ser mayor que meses.")
+        data["deuda_pendientes"] = max(meses - pagados, 0)
+        data["deuda_saldo"] = float(data["deuda_cuota"]) * data["deuda_pendientes"]
+        data["deuda_estado"] = "Pagada" if data["deuda_pendientes"] <= 0 else "Activa"
 
 # =========================
 # CÁLCULOS
@@ -854,6 +937,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def nuevo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
+async def nueva_deuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not allowed(update):
+        return
+    st_reset(context)
+    st = st_get(context)
+    st["data"]["tipo"] = "DEUDA"
+    st["step"] = "deuda_nombre"
+    await update.message.reply_text("Nombre de la deuda:")
+
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st_reset(context)
     await update.message.reply_text("Cancelado. Usa /nuevo para iniciar.")
@@ -1063,6 +1155,12 @@ async def ejecutar_pago_deuda(context: ContextTypes.DEFAULT_TYPE, uid: int, data
     cuota = float(data["deuda_cuota"])
     cuenta_pago = data["cuenta_pago"]
 
+    deuda_actual = next((d for d in build_deudas(gc, uid) if d["row"] == row_num), None)
+    if not deuda_actual:
+        raise ValueError("No encontré la deuda seleccionada.")
+    if deuda_actual["estado"].lower() != "activa" or deuda_actual["pendientes"] <= 0:
+        raise ValueError("Esa deuda ya está pagada.")
+
     sumar_un_pago_deuda(sh, row_num)
     registrar_egreso_deuda(sh, fecha, cuenta_pago, cuota, nombre_deuda)
 
@@ -1207,7 +1305,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if cb.startswith("TO:"):
         data["destino"] = cb.split(":", 1)[1]
-        if data.get("destino") == data.get("remitente") and data.get("mov_type") == "NORMAL":
+        if movimientos_misma_ruta(data):
             await q.edit_message_text("Destino no puede ser igual al remitente.", reply_markup=kb_list(get_accounts_by_role(context)[0], "TO"))
             return
         st["step"] = "monto"
@@ -1304,11 +1402,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if cb.startswith("DEUDA:"):
         row_num = int(cb.split(":")[1])
 
-        activas = context.user_data.get("deudas_activas", [])
+        gc = context.application.bot_data["gc"]
+        activas = [d for d in build_deudas(gc, update.effective_user.id) if d["estado"].lower() == "activa" and d["pendientes"] > 0]
+        context.user_data["deudas_activas"] = activas
         deuda = next((d for d in activas if d["row"] == row_num), None)
 
         if not deuda:
-            await q.edit_message_text("No encontré esa deuda.")
+            await q.edit_message_text("No encontré esa deuda o ya está pagada.")
             return
 
         st["data"]["deuda_row"] = deuda["row"]
@@ -1334,8 +1434,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         st["data"]["cuenta_pago"] = cuenta_pago
 
-        # ejecutar pago
-        await ejecutar_pago_deuda(context, update.effective_user.id, st["data"])
+        try:
+            await ejecutar_pago_deuda(context, update.effective_user.id, st["data"])
+        except Exception as e:
+            st_reset(context)
+            await q.edit_message_text(f"No pude registrar el pago. {e}")
+            return
 
         deuda_nombre = st["data"]["deuda_nombre"]
         cuota = st["data"]["deuda_cuota"]
@@ -1351,7 +1455,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     if cb == "CONFIRM:SAVE":
-        await save_to_sheets(context, data, update.effective_user.id)
+        try:
+            validate_flow_data(data)
+            await save_to_sheets(context, data, update.effective_user.id)
+        except Exception as e:
+            await q.edit_message_text(f"No pude guardar. {e}")
+            return
         st_reset(context)
         await q.edit_message_text("Guardado correctamente.")
         return
@@ -1369,7 +1478,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
 
     if step == "wait_date":
-        data["fecha"] = txt
+        try:
+            data["fecha"] = ensure_fecha_text(txt)
+        except Exception as e:
+            await update.message.reply_text(str(e))
+            return
         cats = get_catalogos(context)
 
         if data["tipo"] == "ING":
@@ -1386,7 +1499,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if step == "monto":
-        data["monto"] = parse_money_text(txt)
+        monto = parse_money_text(txt)
+        if monto <= 0:
+            await update.message.reply_text("El monto debe ser mayor a 0.")
+            return
+        data["monto"] = monto
         if data["tipo"] == "MOV":
             st["step"] = "monto_destino"
             await update.message.reply_text("Monto destino (si es el mismo, escribe 0):")
@@ -1402,6 +1519,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             v = parse_money_text(txt)
         except Exception:
             v = 0.0
+        if v < 0:
+            await update.message.reply_text("El monto destino no puede ser negativo.")
+            return
         data["monto_destino"] = 0.0 if abs(v) < 0.000001 else v
         st["step"] = "nota"
         await update.message.reply_text("Nota (o -):")
@@ -1409,8 +1529,86 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step == "nota":
         data["nota"] = "" if txt == "-" else txt
+        try:
+            validate_flow_data(data)
+        except Exception as e:
+            await update.message.reply_text(str(e))
+            return
         st["step"] = "confirm"
         await update.message.reply_text(render_summary(data), reply_markup=kb_confirm())
+        return
+
+    if step == "deuda_nombre":
+        if not txt:
+            await update.message.reply_text("Escribe el nombre de la deuda.")
+            return
+        data["deuda_nombre"] = txt
+        st["step"] = "deuda_acreedor"
+        await update.message.reply_text("¿A quién le debes?")
+        return
+
+    if step == "deuda_acreedor":
+        if not txt:
+            await update.message.reply_text("Debes indicar a quién le debes.")
+            return
+        data["deuda_acreedor"] = txt
+        st["step"] = "deuda_fecha_pago"
+        await update.message.reply_text("Fecha de pago (YYYY-MM-DD):")
+        return
+
+    if step == "deuda_fecha_pago":
+        try:
+            data["deuda_fecha_pago"] = ensure_fecha_text(txt)
+        except Exception as e:
+            await update.message.reply_text(str(e))
+            return
+        st["step"] = "deuda_cuota"
+        await update.message.reply_text("Cuota:")
+        return
+
+    if step == "deuda_cuota":
+        cuota = parse_money_text(txt)
+        if cuota <= 0:
+            await update.message.reply_text("La cuota debe ser mayor a 0.")
+            return
+        data["deuda_cuota"] = cuota
+        st["step"] = "deuda_meses"
+        await update.message.reply_text("Meses:")
+        return
+
+    if step == "deuda_meses":
+        try:
+            meses = parse_positive_int_text(txt)
+        except Exception:
+            await update.message.reply_text("Meses debe ser un entero mayor a 0.")
+            return
+        if meses <= 0:
+            await update.message.reply_text("Meses debe ser un entero mayor a 0.")
+            return
+        data["deuda_meses"] = meses
+        st["step"] = "deuda_pagados"
+        await update.message.reply_text("Pagados (0 si es nueva):")
+        return
+
+    if step == "deuda_pagados":
+        try:
+            pagados = parse_positive_int_text(txt)
+        except Exception:
+            await update.message.reply_text("Pagados debe ser un entero igual o mayor a 0.")
+            return
+        if pagados > int(data.get("deuda_meses", 0)):
+            await update.message.reply_text("Pagados no puede ser mayor que meses.")
+            return
+        data["deuda_pagados"] = pagados
+        data["tipo"] = "DEUDA"
+        try:
+            validate_flow_data(data)
+        except Exception as e:
+            await update.message.reply_text(str(e))
+            return
+        st["step"] = "confirm"
+        await update.message.reply_text(render_summary(data), reply_markup=kb_confirm())
+        return
 
 # =========================
 # SAVE
@@ -1422,6 +1620,7 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data, uid: int):
     if not sheet_id:
         raise RuntimeError("Tu usuario no tiene Sheet configurado.")
 
+    validate_flow_data(data)
     sh = gc.open_by_key(sheet_id)
 
     if data["tipo"] == "ING":
@@ -1443,6 +1642,20 @@ async def save_to_sheets(context: ContextTypes.DEFAULT_TYPE, data, uid: int):
             data["monto"],
             data.get("monto_destino", 0),
             data.get("nota", ""),
+        ], value_input_option="USER_ENTERED")
+
+    elif data["tipo"] == "DEUDA":
+        ws = sh.worksheet(SHEET_DEUDAS)
+        ws.append_row([
+            data["deuda_nombre"],
+            data["deuda_acreedor"],
+            data["deuda_fecha_pago"],
+            data["deuda_cuota"],
+            data["deuda_meses"],
+            data["deuda_pagados"],
+            data["deuda_pendientes"],
+            data["deuda_saldo"],
+            data["deuda_estado"],
         ], value_input_option="USER_ENTERED")
 
     else:
@@ -1474,6 +1687,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("nuevo", nuevo))
+    app.add_handler(CommandHandler("nueva_deuda", nueva_deuda))
     app.add_handler(CommandHandler("cancelar", cancelar))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("resumen", resumen))
