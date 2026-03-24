@@ -8,8 +8,8 @@ from telegram.ext import (
     filters,
 )
 
-from BotFinanzas.config import BOT_TOKEN, TZ
-from BotFinanzas.handlers.commands import (
+from config import BOT_TOKEN, TZ
+from handlers.commands import (
     ahorro,
     cancelar,
     deudas,
@@ -24,9 +24,9 @@ from BotFinanzas.handlers.commands import (
     start,
     whoami,
 )
-from BotFinanzas.handlers.conversation import on_cb, on_text
-from BotFinanzas.jobs import job_resumen_fin_de_mes, job_resumen_semanal
-from BotFinanzas.sheets_service import gs_client
+from handlers.conversation import on_cb, on_text
+from jobs import job_resumen_fin_de_mes, job_resumen_semanal
+from sheets_service import gs_client
 
 def main():
     gc = gs_client()
