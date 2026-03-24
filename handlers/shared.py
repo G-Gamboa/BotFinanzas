@@ -1,6 +1,6 @@
-from .catalogs import load_catalogos
-from .config import CUENTAS
-from .sheets_service import get_sheet_for_user
+from catalogs import load_catalogos
+from config import CUENTAS
+from sheets_service import get_sheet_for_user
 
 async def ensure_catalogs(update, context):
     gc = context.application.bot_data["gc"]

@@ -1,15 +1,15 @@
 from datetime import datetime, timedelta
 
-from .auth import allowed
-from .catalogs import get_accounts_by_role, get_catalogos
-from .config import BANCOS, BOLSA_NORMAL, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS, PERSONAS_PRESTAMO, TZ
-from .finance import build_deudas
-from .helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text
-from .keyboards import kb_confirm, kb_cuentas_pago, kb_date, kb_list, kb_mov_direction, kb_mov_type
-from .renderers import render_summary
-from .services import ejecutar_pago_deuda, save_to_sheets
-from .state import st_get, st_reset
-from .validators import movimientos_misma_ruta, validate_flow_data
+from auth import allowed
+from catalogs import get_accounts_by_role, get_catalogos
+from config import BANCOS, BOLSA_NORMAL, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS, PERSONAS_PRESTAMO, TZ
+from finance import build_deudas
+from helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text
+from keyboards import kb_confirm, kb_cuentas_pago, kb_date, kb_list, kb_mov_direction, kb_mov_type
+from renderers import render_summary
+from services import ejecutar_pago_deuda, save_to_sheets
+from state import st_get, st_reset
+from validators import movimientos_misma_ruta, validate_flow_data
 
 async def on_cb(update, context):
     if not allowed(update):

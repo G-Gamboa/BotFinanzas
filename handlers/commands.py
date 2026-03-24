@@ -1,13 +1,13 @@
-from shared import ensure_catalogs
-from .auth import allowed
-from .catalogs import get_catalogos, get_accounts_by_role
-from .config import BANCOS, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS
-from .finance import build_deudas, build_networth, build_resumen_mes, build_saldos_dinamicos, build_total_deudas
-from .helpers import format_money_q
-from .keyboards import kb_deudas_activas, kb_main, kb_cuentas_pago
-from .renderers import render_lines_q, render_lines_usd
-from .services import ejecutar_pago_deuda
-from .state import st_get, st_reset
+from .shared import ensure_catalogs
+from auth import allowed
+from catalogs import get_catalogos, get_accounts_by_role
+from config import BANCOS, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS
+from finance import build_deudas, build_networth, build_resumen_mes, build_saldos_dinamicos, build_total_deudas
+from helpers import format_money_q
+from keyboards import kb_deudas_activas, kb_main, kb_cuentas_pago
+from renderers import render_lines_q, render_lines_usd
+from services import ejecutar_pago_deuda
+from state import st_get, st_reset
 
 async def whoami(update, context):
     await update.message.reply_text(f"Tu user_id es: {update.effective_user.id}")
