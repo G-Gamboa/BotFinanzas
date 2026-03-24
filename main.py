@@ -37,7 +37,7 @@ async def error_handler(update, context):
 def main():
     gc = gs_client()
     app = Application.builder().token(BOT_TOKEN).build()
-    app.run_polling(drop_pending_updates=True)
+
     app.bot_data["gc"] = gc
 
     app.job_queue.run_daily(
@@ -70,7 +70,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     print("Bot finanzas encendido...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
