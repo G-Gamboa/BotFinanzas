@@ -1,1 +1,1 @@
-worker: python bot_finanzas.py
+worker: python main.py
