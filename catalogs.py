@@ -1,6 +1,6 @@
-from .config import CUENTAS, INV_CUENTAS_DEFAULT
+from config import CUENTAS, INV_CUENTAS_DEFAULT
 
-from .helpers import norm_key
+from helpers import norm_key
 
 def col_clean(values):
     out = []

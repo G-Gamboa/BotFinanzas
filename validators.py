@@ -1,5 +1,5 @@
-from .helpers import ensure_fecha_text, is_positive_amount
-from .helpers import norm_key
+from helpers import ensure_fecha_text, is_positive_amount
+from helpers import norm_key
 
 def movimientos_misma_ruta(data: dict) -> bool:
     from .config import BOLSA_NORMAL

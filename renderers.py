@@ -1,4 +1,4 @@
-from .helpers import format_money_q
+from helpers import format_money_q
 
 def render_summary(data):
     if data["tipo"] == "DEUDA":

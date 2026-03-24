@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from .config import (
+from config import (
     BANCOS,
     BOLSA_NORMAL,
     SHEET_DEUDAS,
@@ -10,9 +10,9 @@ from .config import (
     TZ,
     USER_SHEETS,
 )
-from .helpers import format_money_q, to_float
-from .sheets_service import get_sheet_for_user
-from .validators import validate_flow_data
+from helpers import format_money_q, to_float
+from sheets_service import get_sheet_for_user
+from validators import validate_flow_data
 
 async def save_to_sheets(context, data, uid: int):
     gc = context.application.bot_data["gc"]

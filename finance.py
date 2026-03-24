@@ -1,8 +1,8 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from .catalogs import canon_cuenta, col_clean, get_investment_accounts_from_catalog
-from .config import (
+from catalogs import canon_cuenta, col_clean, get_investment_accounts_from_catalog
+from config import (
     BOLSA_NORMAL,
     INV_CUENTAS_DEFAULT,
     SHEET_CATEGORIAS,
@@ -13,9 +13,9 @@ from .config import (
     TZ,
     USD_TO_GTQ,
 )
-from .helpers import month_range, norm_key, parse_fecha, pick, to_float, week_range
-from .sheet_utils import build_header_map, cell, row_cell
-from .sheets_service import get_sheet_for_user
+from helpers import month_range, norm_key, parse_fecha, pick, to_float, week_range
+from sheet_utils import build_header_map, cell, row_cell
+from sheets_service import get_sheet_for_user
 
 def build_resumen_mes(gc, uid: int) -> str:
     sh = get_sheet_for_user(gc, uid)

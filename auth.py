@@ -1,4 +1,4 @@
-from .config import USER_SHEETS
+from config import USER_SHEETS
 
 def allowed(update) -> bool:
     if update.message and update.message.text == "/whoami":

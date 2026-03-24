@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
-from .config import TZ, USER_SHEETS
-from .finance import build_resumen_mes, build_resumen_semana
+from config import TZ, USER_SHEETS
+from finance import build_resumen_mes, build_resumen_semana
 
 def is_last_day_of_month(d):
     return (d + timedelta(days=1)).day == 1

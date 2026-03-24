@@ -1,7 +1,7 @@
 import gspread
 from google.oauth2.service_account import Credentials
 
-from .config import SERVICE_ACCOUNT_INFO, USER_SHEETS
+from config import SERVICE_ACCOUNT_INFO, USER_SHEETS
 
 def get_sheet_for_user(gc, uid: int):
     uid_str = str(uid)
