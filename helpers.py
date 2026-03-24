@@ -100,3 +100,7 @@ def format_money_q(value: float) -> str:
 
 def format_money_usd(value: float) -> str:
     return f"${value:,.2f}"
+
+def cuentas_permitidas_egreso(cuentas, inv_accounts):
+    inv_set = {c.strip().lower() for c in inv_accounts}
+    return [c for c in cuentas if c.strip().lower() not in inv_set]

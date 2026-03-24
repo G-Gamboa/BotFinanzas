@@ -4,7 +4,7 @@ from auth import allowed
 from catalogs import get_accounts_by_role, get_catalogos
 from config import BANCOS, BOLSA_NORMAL, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS, PERSONAS_PRESTAMO, TZ
 from finance import build_deudas
-from helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text
+from helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text, cuentas_permitidas_egreso
 from keyboards import kb_confirm, kb_cuentas_pago, kb_date, kb_list, kb_mov_direction, kb_mov_type
 from renderers import render_summary
 from services import ejecutar_pago_deuda, save_to_sheets
@@ -111,6 +111,26 @@ async def on_cb(update, context):
 
     if cb.startswith("CAT:"):
         data["categoria"] = cb.split(":", 1)[1]
+
+        if data.get("tipo") == "EGR":
+            liquid, _, inv = get_accounts_by_role(context)
+            cuentas_validas = cuentas_permitidas_egreso(liquid, inv)
+
+            st["step"] = "cuenta_egreso"
+            await q.edit_message_text(
+                "Cuenta:",
+                reply_markup=kb_list(cuentas_validas, "ACC_EGR")
+            )
+            return
+
+        st["step"] = "monto"
+        await q.edit_message_text("Monto:")
+        return
+    
+
+    if cb.startswith("ACC_EGR:"):
+        data["cuenta"] = cb.split(":", 1)[1]
+
         st["step"] = "monto"
         await q.edit_message_text("Monto:")
         return
