@@ -48,7 +48,7 @@ def sort_special(items: list[str], first: str | None = None, last: str | None = 
     return out
 
 def load_catalogos(sh):
-    from .config import SHEET_CATEGORIAS
+    from config import SHEET_CATEGORIAS
     ws = sh.worksheet(SHEET_CATEGORIAS)
 
     fuentes_ing = col_clean(ws.col_values(1))

@@ -91,7 +91,7 @@ def registrar_egreso_deuda(sh, fecha: str, cuenta_pago: str, monto: float, nombr
     ], value_input_option="USER_ENTERED")
 
 async def ejecutar_pago_deuda(context, uid: int, data: dict):
-    from .finance import build_deudas
+    from finance import build_deudas
 
     gc = context.application.bot_data["gc"]
     sh = get_sheet_for_user(gc, uid)

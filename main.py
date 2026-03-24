@@ -1,4 +1,5 @@
 from datetime import time as dtime
+import logging
 
 from telegram.ext import (
     Application,
@@ -27,6 +28,11 @@ from handlers.commands import (
 from handlers.conversation import on_cb, on_text
 from jobs import job_resumen_fin_de_mes, job_resumen_semanal
 from sheets_service import gs_client
+
+logger = logging.getLogger(__name__)
+
+async def error_handler(update, context):
+    logger.exception("Exception while handling an update:", exc_info=context.error)
 
 def main():
     gc = gs_client()

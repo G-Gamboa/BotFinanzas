@@ -2,7 +2,7 @@ from helpers import ensure_fecha_text, is_positive_amount
 from helpers import norm_key
 
 def movimientos_misma_ruta(data: dict) -> bool:
-    from .config import BOLSA_NORMAL
+    from config import BOLSA_NORMAL
     return (
         norm_key(data.get("bolsa_remitente", BOLSA_NORMAL)) == norm_key(data.get("bolsa_destino", BOLSA_NORMAL))
         and norm_key(data.get("remitente", "")) == norm_key(data.get("destino", ""))
