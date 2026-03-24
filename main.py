@@ -37,6 +37,7 @@ async def error_handler(update, context):
 def main():
     gc = gs_client()
     app = Application.builder().token(BOT_TOKEN).build()
+    app.run_polling(drop_pending_updates=True)
     app.bot_data["gc"] = gc
 
     app.job_queue.run_daily(
