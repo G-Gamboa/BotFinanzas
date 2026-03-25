@@ -129,7 +129,10 @@ async def on_cb(update, context):
     
 
     if cb.startswith("ACC_EGR:"):
-        data["cuenta"] = cb.split(":", 1)[1]
+        cuenta = cb.split(":", 1)[1]
+
+        data["bolsa_remitente"] = BOLSA_NORMAL
+        data["remitente"] = cuenta
 
         st["step"] = "monto"
         await q.edit_message_text("Monto:")
