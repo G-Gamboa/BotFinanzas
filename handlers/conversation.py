@@ -129,10 +129,7 @@ async def on_cb(update, context):
     
 
     if cb.startswith("ACC_EGR:"):
-        cuenta = cb.split(":", 1)[1]
-
-        data["bolsa_remitente"] = BOLSA_NORMAL
-        data["remitente"] = cuenta
+        data["cuenta"] = cb.split(":", 1)[1]
 
         st["step"] = "monto"
         await q.edit_message_text("Monto:")
@@ -140,6 +137,25 @@ async def on_cb(update, context):
 
     if cb.startswith("PAY:"):
         data["metodo"] = cb.split(":", 1)[1]
+
+        if data.get("tipo") == "EGR":
+            cats = get_catalogos(context) or {}
+            cuentas = cats.get("CUENTAS", CUENTAS)
+            liquid, _, inv = get_accounts_by_role(context)
+            cuentas_validas = cuentas_permitidas_egreso(liquid, inv)
+
+            if data["metodo"] == "Transferencia":
+                st["step"] = "banco"
+                await q.edit_message_text("Cuenta:", reply_markup=kb_list(cuentas_validas, "BANK"))
+            else:
+                if data["metodo"] not in cuentas_validas:
+                    await q.edit_message_text("Cuenta no permitida para egreso.")
+                    return
+                data["banco"] = ""
+                st["step"] = "nota"
+                await q.edit_message_text("Nota (o -):")
+            return
+
         if data["metodo"] == "Transferencia":
             st["step"] = "banco"
             cats = get_catalogos(context)
