@@ -4,7 +4,7 @@ from auth import allowed
 from catalogs import get_accounts_by_role, get_catalogos
 from config import BANCOS, BOLSA_NORMAL, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS, PERSONAS_PRESTAMO, TZ
 from finance import build_deudas
-from helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text, cuentas_permitidas_egreso
+from helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text
 from keyboards import kb_confirm, kb_cuentas_pago, kb_date, kb_list, kb_mov_direction, kb_mov_type
 from renderers import render_summary
 from services import ejecutar_pago_deuda, save_to_sheets
@@ -117,25 +117,6 @@ async def on_cb(update, context):
 
     if cb.startswith("PAY:"):
         data["metodo"] = cb.split(":", 1)[1]
-
-        if data["metodo"] == "Transferencia":
-            st["step"] = "banco"
-            cats = get_catalogos(context) or {}
-            bancos = cats.get("BANCOS", BANCOS)
-
-            if data.get("tipo") == "EGR":
-                _, banks, inv = get_accounts_by_role(context)
-                inv_set = {x.strip().lower() for x in inv}
-                bancos_validos = [b for b in banks if b.strip().lower() not in inv_set]
-                await q.edit_message_text("Cuenta:", reply_markup=kb_list(bancos_validos, "BANK"))
-            else:
-                await q.edit_message_text("Banco:", reply_markup=kb_list(bancos, "BANK"))
-        else:
-            data["banco"] = ""
-            st["step"] = "nota"
-            await q.edit_message_text("Nota (o -):")
-        return
-
         if data["metodo"] == "Transferencia":
             st["step"] = "banco"
             cats = get_catalogos(context)
