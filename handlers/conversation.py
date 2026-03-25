@@ -111,26 +111,6 @@ async def on_cb(update, context):
 
     if cb.startswith("CAT:"):
         data["categoria"] = cb.split(":", 1)[1]
-
-        if data.get("tipo") == "EGR":
-            liquid, _, inv = get_accounts_by_role(context)
-            cuentas_validas = cuentas_permitidas_egreso(liquid, inv)
-
-            st["step"] = "cuenta_egreso"
-            await q.edit_message_text(
-                "Cuenta:",
-                reply_markup=kb_list(cuentas_validas, "ACC_EGR")
-            )
-            return
-
-        st["step"] = "monto"
-        await q.edit_message_text("Monto:")
-        return
-    
-
-    if cb.startswith("ACC_EGR:"):
-        data["cuenta"] = cb.split(":", 1)[1]
-
         st["step"] = "monto"
         await q.edit_message_text("Monto:")
         return
@@ -138,23 +118,23 @@ async def on_cb(update, context):
     if cb.startswith("PAY:"):
         data["metodo"] = cb.split(":", 1)[1]
 
-        if data.get("tipo") == "EGR":
+        if data["metodo"] == "Transferencia":
+            st["step"] = "banco"
             cats = get_catalogos(context) or {}
-            cuentas = cats.get("CUENTAS", CUENTAS)
-            liquid, _, inv = get_accounts_by_role(context)
-            cuentas_validas = cuentas_permitidas_egreso(liquid, inv)
+            bancos = cats.get("BANCOS", BANCOS)
 
-            if data["metodo"] == "Transferencia":
-                st["step"] = "banco"
-                await q.edit_message_text("Cuenta:", reply_markup=kb_list(cuentas_validas, "BANK"))
+            if data.get("tipo") == "EGR":
+                _, banks, inv = get_accounts_by_role(context)
+                inv_set = {x.strip().lower() for x in inv}
+                bancos_validos = [b for b in banks if b.strip().lower() not in inv_set]
+                await q.edit_message_text("Cuenta:", reply_markup=kb_list(bancos_validos, "BANK"))
             else:
-                if data["metodo"] not in cuentas_validas:
-                    await q.edit_message_text("Cuenta no permitida para egreso.")
-                    return
-                data["banco"] = ""
-                st["step"] = "nota"
-                await q.edit_message_text("Nota (o -):")
-            return
+                await q.edit_message_text("Banco:", reply_markup=kb_list(bancos, "BANK"))
+        else:
+            data["banco"] = ""
+            st["step"] = "nota"
+            await q.edit_message_text("Nota (o -):")
+        return
 
         if data["metodo"] == "Transferencia":
             st["step"] = "banco"
