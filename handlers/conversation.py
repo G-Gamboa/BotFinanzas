@@ -348,6 +348,12 @@ async def on_text(update, context):
             st["step"] = "metodo"
             cats = get_catalogos(context)
             metodos = cats["METODOS"] if cats else METODOS
+
+            if data["tipo"] == "EGR":
+                _, _, inv = get_accounts_by_role(context)
+                inv_set = {x.strip().lower() for x in inv}
+                metodos = [m for m in metodos if m.strip().lower() not in inv_set]
+
             await update.message.reply_text("Método:", reply_markup=kb_list(metodos, "PAY"))
         return
 
