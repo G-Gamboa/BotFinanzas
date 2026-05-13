@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 from auth import allowed
 from catalogs import get_accounts_by_role, get_catalogos
-from config import BANCOS, BOLSA_NORMAL, CATEG_EGR, CATEG_ING, CUENTAS, FUENTES_ING, METODOS, PERSONAS_PRESTAMO, TZ
+from config import BANCOS, BOLSA_NORMAL, CATEG_EGR, CATEG_ING, FUENTES_ING, METODOS, PERSONAS_PRESTAMO, TZ
 from finance import build_deudas
 from helpers import ensure_fecha_text, format_money_q, parse_money_text, parse_positive_int_text
 from keyboards import kb_confirm, kb_cuentas_pago, kb_date, kb_list, kb_mov_direction, kb_mov_type
@@ -257,11 +257,8 @@ async def on_cb(update, context):
         st["data"]["deuda_nombre"] = deuda["nombre"]
         st["data"]["deuda_cuota"] = deuda["cuota"]
 
-        cats = get_catalogos(context)
-        cuentas = cats["CUENTAS"] if cats else CUENTAS
-
-        excluir = {"ahorro", "prestamos", "ugly", "binance", "osmo", "hapi"}
-        cuentas_pago = [c for c in cuentas if c.strip().lower() not in excluir]
+        liquid, _, _ = get_accounts_by_role(context)
+        cuentas_pago = liquid
 
         st["step"] = "pagar_deuda_cuenta"
         await q.edit_message_text(

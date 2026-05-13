@@ -14,7 +14,7 @@ def render_summary(data):
             f"Saldo: {format_money_q(float(data.get('deuda_saldo', 0) or 0))}\n"
             f"Estado: {data.get('deuda_estado','')}"
         )
-    if data["tipo"] == "ING":
+    elif data["tipo"] == "ING":
         return (
             "Resumen:\n"
             f"Fecha: {data.get('fecha','')}\n"

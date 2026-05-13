@@ -1,7 +1,10 @@
+import logging
 from datetime import datetime, timedelta
 
 from config import TZ, USER_SHEETS
 from finance import build_resumen_mes, build_resumen_semana
+
+logger = logging.getLogger(__name__)
 
 def is_last_day_of_month(d):
     return (d + timedelta(days=1)).day == 1
@@ -15,7 +18,7 @@ async def job_resumen_semanal(context):
             txt = build_resumen_semana(gc, uid)
             await bot.send_message(chat_id=uid, text=txt)
         except Exception:
-            pass
+            logger.exception("Error enviando resumen semanal a uid=%s", uid)
 
 async def job_resumen_fin_de_mes(context):
     hoy = datetime.now(TZ).date()
@@ -29,4 +32,4 @@ async def job_resumen_fin_de_mes(context):
             txt = build_resumen_mes(gc, uid)
             await bot.send_message(chat_id=uid, text=f"Fin de mes:\n\n{txt}")
         except Exception:
-            pass
+            logger.exception("Error enviando resumen mensual a uid=%s", uid)

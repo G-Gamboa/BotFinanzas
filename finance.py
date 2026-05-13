@@ -14,16 +14,16 @@ from config import (
     USD_TO_GTQ,
 )
 from helpers import month_range, norm_key, parse_fecha, pick, to_float, week_range
-from sheet_utils import build_header_map, cell, row_cell
+from sheet_utils import build_header_map, cell
 from sheets_service import get_sheet_for_user
 
-def build_resumen_mes(gc, uid: int) -> str:
+def _build_resumen(gc, uid: int, range_fn, label: str) -> str:
     sh = get_sheet_for_user(gc, uid)
     ws_ing = sh.worksheet(SHEET_INGRESOS)
     ws_egr = sh.worksheet(SHEET_EGRESOS)
 
     today = datetime.now(TZ).date()
-    start, end = month_range(today)
+    start, end = range_fn(today)
 
     ing_rows = ws_ing.get_all_records()
     egr_rows = ws_egr.get_all_records()
@@ -52,54 +52,18 @@ def build_resumen_mes(gc, uid: int) -> str:
     top_txt = "\n".join([f"- {c}: {v:,.2f}" for c, v in top]) if top else "- (sin egresos aún)"
 
     return (
-        f"Resumen del mes ({start} a {end - timedelta(days=1)}):\n"
+        f"{label} ({start} a {end - timedelta(days=1)}):\n"
         f"Ingresos: {total_ing:,.2f}\n"
         f"Egresos: {total_egr:,.2f}\n"
         f"Balance: {balance:,.2f}\n\n"
         f"Top gastos:\n{top_txt}"
     )
+
+def build_resumen_mes(gc, uid: int) -> str:
+    return _build_resumen(gc, uid, month_range, "Resumen del mes")
 
 def build_resumen_semana(gc, uid: int) -> str:
-    sh = get_sheet_for_user(gc, uid)
-    ws_ing = sh.worksheet(SHEET_INGRESOS)
-    ws_egr = sh.worksheet(SHEET_EGRESOS)
-
-    today = datetime.now(TZ).date()
-    start, end = week_range(today)
-
-    ing_rows = ws_ing.get_all_records()
-    egr_rows = ws_egr.get_all_records()
-
-    total_ing = 0.0
-    total_egr = 0.0
-    gastos_por_categoria = defaultdict(float)
-
-    for r in ing_rows:
-        f = parse_fecha(pick(r, "FECHA", "Fecha"))
-        if not f or not (start <= f < end):
-            continue
-        total_ing += to_float(pick(r, "MONTO", "Monto"))
-
-    for r in egr_rows:
-        f = parse_fecha(pick(r, "FECHA", "Fecha"))
-        if not f or not (start <= f < end):
-            continue
-        monto = to_float(pick(r, "MONTO", "Monto"))
-        cat = str(pick(r, "CATEGORÍA", "CATEGORIA", "Categoría", "Categoria") or "").strip()
-        total_egr += monto
-        gastos_por_categoria[cat] += monto
-
-    balance = total_ing - total_egr
-    top = sorted(gastos_por_categoria.items(), key=lambda x: x[1], reverse=True)[:6]
-    top_txt = "\n".join([f"- {c}: {v:,.2f}" for c, v in top]) if top else "- (sin egresos aún)"
-
-    return (
-        f"Resumen semanal ({start} a {end - timedelta(days=1)}):\n"
-        f"Ingresos: {total_ing:,.2f}\n"
-        f"Egresos: {total_egr:,.2f}\n"
-        f"Balance: {balance:,.2f}\n\n"
-        f"Top gastos:\n{top_txt}"
-    )
+    return _build_resumen(gc, uid, week_range, "Resumen semanal")
 
 def build_saldos_dinamicos(
     gc,
@@ -302,15 +266,15 @@ def build_deudas(gc, uid: int) -> list[dict]:
         if not any((c or "").strip() for c in row):
             continue
 
-        nombre = str(row_cell(row, hmap, "NOMBRE") or "").strip()
-        acreedor = str(row_cell(row, hmap, "A QUIÉN LE DEBO", "A QUIEN LE DEBO") or "").strip()
-        fecha_pago = str(row_cell(row, hmap, "FECHA DE PAGO") or "").strip()
-        cuota = to_float(row_cell(row, hmap, "CUOTA"))
-        meses = int(to_float(row_cell(row, hmap, "MESES")))
-        pagados = int(to_float(row_cell(row, hmap, "PAGADOS")))
-        pendientes = int(to_float(row_cell(row, hmap, "PENDIENTES")))
-        saldo = to_float(row_cell(row, hmap, "SALDO"))
-        estado = str(row_cell(row, hmap, "ESTADO") or "").strip()
+        nombre = str(cell(row, hmap, "NOMBRE") or "").strip()
+        acreedor = str(cell(row, hmap, "A QUIÉN LE DEBO", "A QUIEN LE DEBO") or "").strip()
+        fecha_pago = str(cell(row, hmap, "FECHA DE PAGO") or "").strip()
+        cuota = to_float(cell(row, hmap, "CUOTA"))
+        meses = int(to_float(cell(row, hmap, "MESES")))
+        pagados = int(to_float(cell(row, hmap, "PAGADOS")))
+        pendientes = int(to_float(cell(row, hmap, "PENDIENTES")))
+        saldo = to_float(cell(row, hmap, "SALDO"))
+        estado = str(cell(row, hmap, "ESTADO") or "").strip()
 
         if pendientes <= 0 and meses > pagados:
             pendientes = max(meses - pagados, 0)

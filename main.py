@@ -1,5 +1,5 @@
-from datetime import time as dtime
 import logging
+from datetime import time as dtime
 
 from telegram.ext import (
     Application,
@@ -29,6 +29,10 @@ from handlers.conversation import on_cb, on_text
 from jobs import job_resumen_fin_de_mes, job_resumen_semanal
 from sheets_service import gs_client
 
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+)
 logger = logging.getLogger(__name__)
 
 async def error_handler(update, context):
@@ -69,7 +73,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-    print("Bot finanzas encendido...")
+    logger.info("Bot finanzas encendido")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":

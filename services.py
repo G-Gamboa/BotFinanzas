@@ -10,6 +10,8 @@ from config import (
     TZ,
     USER_SHEETS,
 )
+
+_BANCOS_LOWER = {b.lower() for b in BANCOS}
 from helpers import format_money_q, to_float
 from sheets_service import get_sheet_for_user
 from validators import validate_flow_data
@@ -74,7 +76,7 @@ def sumar_un_pago_deuda(sh, row_num: int):
 def registrar_egreso_deuda(sh, fecha: str, cuenta_pago: str, monto: float, nombre_deuda: str):
     ws = sh.worksheet(SHEET_EGRESOS)
 
-    if cuenta_pago.strip().lower() in {"bi", "banrural", "nexa", "zigi", "gyt"}:
+    if cuenta_pago.strip().lower() in _BANCOS_LOWER:
         metodo = "Transferencia"
         banco = cuenta_pago
     else:

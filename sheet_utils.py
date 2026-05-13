@@ -14,6 +14,3 @@ def cell(row: list, hmap: dict[str, int], *names: str):
             if idx < len(row):
                 return row[idx]
     return ""
-
-def row_cell(row: list, hmap: dict[str, int], *names: str):
-    return cell(row, hmap, *names)

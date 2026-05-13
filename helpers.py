@@ -7,8 +7,7 @@ def norm(s: str) -> str:
     s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
     return s
 
-def norm_key(s: str) -> str:
-    return norm(s)
+norm_key = norm
 
 def pick(row: dict, *candidates: str):
     nrow = {norm(k): v for k, v in row.items()}
